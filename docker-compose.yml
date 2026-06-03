@@ -12,7 +12,7 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.1-8b-instant}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
-      - SIMILARITY_THRESHOLD=${SIMILARITY_THRESHOLD:-0.75}
+      - SIMILARITY_THRESHOLD=${SIMILARITY_THRESHOLD:-0.5}
       - TOP_K=${TOP_K:-5}
       - CHUNK_SIZE=${CHUNK_SIZE:-512}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-50}
@@ -22,6 +22,8 @@ services:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - GOOGLE_CSE_ID=${GOOGLE_CSE_ID}
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:5173
+      - MAX_QUERY_LENGTH=2000
       - DATA_DIR=/data
     volumes:
       - ./data:/data

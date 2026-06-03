@@ -3,10 +3,10 @@ import os
 from pathlib import Path
 from datetime import datetime
 
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.document import Document, DocumentStatus
 from app.schemas.document import DocumentOut, UploadResponse, DeleteResponse
 from app.services.ingestion import ingest_file
@@ -20,7 +20,7 @@ MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 
 @router.post("/upload", status_code=202, response_model=UploadResponse)
-async def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...), db: Session = Depends(get_db)):
     ext = Path(file.filename).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(400, f"File type {ext} not allowed. Use: {ALLOWED_EXTENSIONS}")
@@ -35,7 +35,14 @@ async def upload_document(file: UploadFile = File(...), db: Session = Depends(ge
     with open(file_path, "wb") as f:
         f.write(contents)
 
-    ingest_file(file_path, file.filename, len(contents), db)
+    def background_ingest():
+        bg_db = SessionLocal()
+        try:
+            ingest_file(file_path, file.filename, len(contents), bg_db)
+        finally:
+            bg_db.close()
+
+    background_tasks.add_task(background_ingest)
     return UploadResponse(document_id=doc_id, message="Upload berhasil. Ingestion sedang diproses.")
 
 

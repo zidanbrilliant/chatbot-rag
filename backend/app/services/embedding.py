@@ -13,5 +13,8 @@ def generate_embedding(text: str) -> list[float]:
     return resp.json()["embedding"]
 
 
+import concurrent.futures
+
 def generate_embeddings(texts: list[str]) -> list[list[float]]:
-    return [generate_embedding(t) for t in texts]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        return list(executor.map(generate_embedding, texts))

@@ -15,9 +15,7 @@ def get_groq() -> Groq:
 
 def generate_response(system_prompt: str, context: str, history: str, query: str) -> str:
     client = get_groq()
-    messages = [
-        {"role": "system", "content": system_prompt},
-    ]
+    messages = [{"role": "system", "content": system_prompt}]
     if history:
         messages.append({"role": "user", "content": f"Previous conversation:\n{history}"})
     if context:
@@ -27,5 +25,7 @@ def generate_response(system_prompt: str, context: str, history: str, query: str
     completion = client.chat.completions.create(
         model=GROQ_MODEL,
         messages=messages,
+        max_tokens=1024,
+        temperature=0.3,
     )
-    return completion.choices[0].message.content
+    return completion.choices[0].message.content or ""

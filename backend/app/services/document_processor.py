@@ -15,30 +15,46 @@ def parse_pdf(file_path: str) -> str:
 def parse_docx(file_path: str) -> str:
     from docx import Document
     doc = Document(file_path)
-    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-    return "\n".join(paragraphs)
+    text_parts = []
+    for p in doc.paragraphs:
+        if p.text.strip():
+            text_parts.append(p.text.strip())
+            
+    for table in doc.tables:
+        for row in table.rows:
+            row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+            if row_text:
+                text_parts.append(row_text)
+                
+    return "\n".join(text_parts)
 
 
 def parse_csv(file_path: str) -> str:
     import pandas as pd
-    df = pd.read_csv(file_path)
+    try:
+        df = pd.read_csv(file_path, encoding='utf-8')
+    except UnicodeDecodeError:
+        df = pd.read_csv(file_path, encoding='latin1')
+    
+    df = df.fillna("")
+    columns = df.columns.tolist()
     lines = []
     for _, row in df.iterrows():
-        line = " | ".join(str(v) for v in row.values)
-        lines.append(line)
-    header = " | ".join(df.columns)
-    return header + "\n" + "\n".join(lines)
+        row_str = ", ".join(f"{col}: {val}" for col, val in zip(columns, row.values))
+        lines.append(row_str)
+    return "\n".join(lines)
 
 
 def parse_excel(file_path: str) -> str:
     import pandas as pd
     df = pd.read_excel(file_path)
+    df = df.fillna("")
+    columns = df.columns.tolist()
     lines = []
     for _, row in df.iterrows():
-        line = " | ".join(str(v) for v in row.values)
-        lines.append(line)
-    header = " | ".join(df.columns)
-    return header + "\n" + "\n".join(lines)
+        row_str = ", ".join(f"{col}: {val}" for col, val in zip(columns, row.values))
+        lines.append(row_str)
+    return "\n".join(lines)
 
 
 def parse_document(file_path: str) -> str:

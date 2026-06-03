@@ -48,7 +48,7 @@ export default function AdminPanel() {
   return (
     <div className="admin-panel">
       <h2>Document Management</h2>
-      {message && <p className="message">{message}</p>}
+      {message && <p className="status-message">{message}</p>}
       <div className="upload-area">
         <label className="upload-btn">
           {uploading ? 'Uploading...' : 'Upload Document'}

@@ -1,11 +1,14 @@
 import os
 import logging
+import re
+import html
 from pathlib import Path
+import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import DATA_DIR
+from app.config import DATA_DIR, CORS_ORIGINS
 from app.database import engine, Base, SessionLocal
 from app.routers import chat, documents
 from app.services.qdrant_client import ensure_collection
@@ -17,7 +20,7 @@ app = FastAPI(title="Knowledge Base Chatbot", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS.split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,4 +58,5 @@ def auto_ingest_data_dir():
 def on_startup():
     Base.metadata.create_all(bind=engine)
     ensure_collection()
-    auto_ingest_data_dir()
+    thread = threading.Thread(target=auto_ingest_data_dir, daemon=True)
+    thread.start()
