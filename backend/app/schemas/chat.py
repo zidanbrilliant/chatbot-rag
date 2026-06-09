@@ -1,22 +1,23 @@
 from pydantic import BaseModel
-from typing import Optional
 
 
 class QueryRequest(BaseModel):
-    session_id: Optional[str] = None
+    session_id: str | None = None
     query: str
 
 
 class Source(BaseModel):
     file_name: str
-    page_number: Optional[int] = None
-    row_index: Optional[int] = None
+    page_number: int | None = None
+    row_index: int | None = None
 
 
 class QueryResponse(BaseModel):
     session_id: str
     reply: str
+    message_id: str = ""
     sources: list[Source] = []
+    confidence: str = ""  # high | medium | low | abstain
     fallback_triggered: bool = False
     out_of_context: bool = False
 
@@ -34,3 +35,12 @@ class ExternalSource(BaseModel):
 class FallbackResponse(BaseModel):
     reply: str
     external_sources: list[ExternalSource] = []
+
+
+class FeedbackRequest(BaseModel):
+    message_id: str
+    feedback: str
+
+
+class FeedbackResponse(BaseModel):
+    message: str

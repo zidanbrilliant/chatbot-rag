@@ -6,25 +6,40 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - APP_ENV=${APP_ENV:-development}
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/chatbot
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
+      - QDRANT_GRPC_PORT=6334
+      - QDRANT_COLLECTION=${QDRANT_COLLECTION:-company_knowledge_base}
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.1-8b-instant}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
-      - SIMILARITY_THRESHOLD=${SIMILARITY_THRESHOLD:-0.5}
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - OLLAMA_LLM_MODEL=${OLLAMA_LLM_MODEL:-qwen2.5:7b}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-bge-m3}
+      - EMBEDDING_DIM=${EMBEDDING_DIM:-1024}
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - SIMILARITY_THRESHOLD=${SIMILARITY_THRESHOLD:-0.55}
       - TOP_K=${TOP_K:-5}
       - CHUNK_SIZE=${CHUNK_SIZE:-512}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-50}
+      - HYBRID_TOP_K=${HYBRID_TOP_K:-20}
+      - MAX_QUERY_LENGTH=${MAX_QUERY_LENGTH:-2000}
       - SESSION_TIMEOUT_MINUTES=${SESSION_TIMEOUT_MINUTES:-30}
-      - MAX_HISTORY_TURNS=${MAX_HISTORY_TURNS:-10}
+      - SESSION_MAX_TURNS=${SESSION_MAX_TURNS:-10}
+      - SESSION_CLEANUP_INTERVAL=${SESSION_CLEANUP_INTERVAL:-300}
       - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-50}
+      - DATA_DIR=/data
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - GOOGLE_CSE_ID=${GOOGLE_CSE_ID}
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - ENABLE_EXTERNAL_FALLBACK=${ENABLE_EXTERNAL_FALLBACK:-false}
       - CORS_ORIGINS=http://localhost:3000,http://localhost:5173
-      - MAX_QUERY_LENGTH=2000
-      - DATA_DIR=/data
+      - RATE_LIMIT_WINDOW=${RATE_LIMIT_WINDOW:-60}
+      - RATE_LIMIT_CHAT_MAX=${RATE_LIMIT_CHAT_MAX:-30}
+      - RATE_LIMIT_ADMIN_MAX=${RATE_LIMIT_ADMIN_MAX:-15}
+      - RATE_LIMIT_CLEANUP_INTERVAL=${RATE_LIMIT_CLEANUP_INTERVAL:-300}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change_me_in_production}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     volumes:
       - ./data:/data
     depends_on:
@@ -32,6 +47,32 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+
+  worker:
+    build: ./backend
+    command: python -m app.worker
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/chatbot
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - QDRANT_GRPC_PORT=6334
+      - QDRANT_COLLECTION=${QDRANT_COLLECTION:-company_knowledge_base}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-bge-m3}
+      - EMBEDDING_DIM=${EMBEDDING_DIM:-1024}
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - CHUNK_SIZE=${CHUNK_SIZE:-512}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-50}
+      - DATA_DIR=/data
+      - WORKER_POLL_INTERVAL=5
+      - WORKER_MAX_ATTEMPTS=3
+    volumes:
+      - ./data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    restart: unless-stopped
 
   frontend:
     build: ./frontend
@@ -45,11 +86,11 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: chatbot
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-chatbot}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -61,10 +102,15 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.12.1
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
 
 volumes:
   pgdata:

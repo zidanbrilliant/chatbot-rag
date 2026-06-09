@@ -1,24 +1,46 @@
-import os
+# config.py — backward-compatible wrapper
+# Delegates to app.core.config (Pydantic Settings loader).
+# All existing imports continue to work unchanged.
 
-
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@db:5432/chatbot")
-QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
-QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.5"))
-TOP_K = int(os.getenv("TOP_K", "5"))
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
-SESSION_TIMEOUT_MINUTES = int(os.getenv("SESSION_TIMEOUT_MINUTES", "30"))
-MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "10"))
-MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "company_knowledge_base")
-VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "768"))
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID", "")
-DATA_DIR = os.getenv("DATA_DIR", "/data")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173")
-MAX_QUERY_LENGTH = int(os.getenv("MAX_QUERY_LENGTH", "2000"))
+from app.core.config import (  # noqa: F401
+    ADMIN_RATE_LIMIT_MAX,
+    APP_ENV,
+    ADMIN_API_KEY,
+    CHUNK_OVERLAP,
+    CHUNK_SIZE,
+    CORS_ORIGINS,
+    DATABASE_URL,
+    DATA_DIR,
+    EMBEDDING_DIM,
+    EMBEDDING_MODEL,
+    ENABLE_EXTERNAL_FALLBACK,
+    GOOGLE_API_KEY,
+    GOOGLE_CSE_ID,
+    GROQ_API_KEY,
+    GROQ_MODEL,
+    HYBRID_TOP_K,
+    JWT_SECRET_KEY,
+    LLM_PROVIDER,
+    MAX_FILE_SIZE_MB,
+    MAX_HISTORY_TURNS,
+    MAX_QUERY_LENGTH,
+    OLLAMA_BASE_URL,
+    OLLAMA_LLM_MODEL,
+    QDRANT_COLLECTION,
+    QDRANT_GRPC_PORT,
+    QDRANT_HOST,
+    QDRANT_PORT,
+    QDRANT_URL,
+    RATE_LIMIT_ADMIN_MAX,
+    RATE_LIMIT_CHAT_MAX,
+    RATE_LIMIT_CLEANUP_INTERVAL,
+    RATE_LIMIT_MAX,
+    RATE_LIMIT_WINDOW,
+    SESSION_CLEANUP_INTERVAL,
+    SESSION_MAX_TURNS,
+    SESSION_TIMEOUT_MINUTES,
+    SIMILARITY_THRESHOLD,
+    TOP_K,
+    VECTOR_SIZE,
+    REDIS_URL,
+)

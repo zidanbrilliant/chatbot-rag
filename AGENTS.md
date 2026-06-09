@@ -1,96 +1,156 @@
 # AGENTS.md — Internal Knowledge Base Chatbot (RAG)
 
-## Status
-
-Implementation in progress. Backend (FastAPI) and frontend (React) scaffolding complete. All 25 tasks from `docs/task.md` implemented.
-
 ## Reference documents
 
 | File | Purpose |
 |---|---|
-| `docs/prd-chatbot.md` | Full PRD: goals, requirements (FR-01 through FR-08), architecture, milestones, KPIs |
-| `docs/spec.md` | DB schemas (Qdrant + SQL), 5 REST API endpoint specs |
-| `docs/task.md` | 25 concrete dev tasks across 5 milestones (all checked) |
+| `docs/prd.md` | Full PRD (goals, architecture, requirements, milestones) |
+| `docs/task.md` | 25 dev tasks across 5 milestones |
+| `docs/audit-report.md` | Baseline gap analysis vs PRD |
+| `docs/AI_CODING_GUARDRAILS.md` | AI coding rules — read before modifying code |
 
-These three files **are the sole truth**. All documents are in **Bahasa Indonesia**.
+All docs in **Bahasa Indonesia**. PRD + task.md are the source of truth.
 
-## Planned tech stack
+## Tech stack
 
-| Layer | Choice | Notes |
-|---|---|---|
-| Backend | **FastAPI** (Python) | REST API |
-| Frontend | **React** (Vite) | |
-| Vector DB | **Qdrant** | Collection: `company_knowledge_base`, 768-dim, Cosine |
-| Relational DB | **PostgreSQL** | SQLAlchemy ORM |
-| Embedding | `nomic-embed-text` via Ollama | 768 dimensions |
-| Chunking | **LangChain** `RecursiveCharacterTextSplitter` | 512 tokens, 50 overlap |
-| Container | **Docker Compose** | Backend + Frontend + Qdrant + PostgreSQL |
-| Fallback search | Google Custom Search JSON API | |
+| Layer | Choice |
+|---|---|
+| Backend | FastAPI (Python 3.10) |
+| Frontend | React 18 (Vite) — no auth in MVP |
+| Vector DB | Qdrant v1.12.1, collection `company_knowledge_base`, 768-dim Cosine |
+| Relational DB | PostgreSQL 16 (SQLAlchemy ORM) |
+| Embedding | `nomic-embed-text` via Ollama (host machine, NOT containerized) |
+| LLM | Ollama (`qwen2.5:7b`) with automatic Groq fallback |
+| Chunking | LangChain `RecursiveCharacterTextSplitter` |
+| Container | Docker Compose (5 services: backend, frontend, db, qdrant, worker) |
 
-## Architecture summary
-
-Single FastAPI backend serving a web frontend. Three core pipelines:
-1. **RAG Query:** sanitize → embed → Qdrant search (top-k 3–5, threshold ≥ 0.5) → build prompt → Groq API → return with citations
-2. **Document Ingestion:** upload → parse → chunk → embed → upsert Qdrant
-3. **Fallback/Guardrails:** below-threshold → offer Google Search; out-of-context → reject politely
-
-## Project structure
-
-```
-backend/
-  app/
-    main.py              — FastAPI app, startup (DB tables + Qdrant collection)
-    config.py            — All env-var-driven config
-    database.py          — SQLAlchemy engine + session
-    models/              — document, chat (SQLAlchemy ORM)
-    schemas/             — chat, document (Pydantic)
-    routers/             — chat, documents (API endpoints)
-    services/            — qdrant_client, groq_client, embedding, document_processor, chunking
-    core/                — logging (JSON structured)
-  tests/                 — test_chunking, test_parsers, test_integration
-  requirements.txt
-  Dockerfile
-frontend/
-  src/
-    components/          — Chat.jsx, AdminPanel.jsx
-    api.js               — Axios API client
-    App.jsx              — Tab-based layout (Chat / Admin Panel)
-    App.css
-  Dockerfile
-  package.json
-docker-compose.yml       — backend + frontend + db (PostgreSQL) + qdrant
-.env.example
-```
-
-## Key constraints
-
-- **No auth in MVP.** SSO deferred to Phase 2.
-- Admin panel must be internal-network/VPN only (SEC-05).
-- Secrets (API keys) in env vars or secret manager — never hardcoded (SEC-02).
-- P95 response ≤ 5 sec, doc ingestion ≤ 60 sec, ≥ 200 concurrent users.
-- Chunk size 512 tokens, overlap 50 tokens (both configurable via env).
-- Session expires after 30 min, keeps last 10 turns.
-- File upload max 50 MB, formats: PDF, DOCX, XLSX, CSV.
-- All critical config (thresholds, model name, timeout, chunk size) must be env-variable driven — no rebuild needed.
-- **Business context boundary:** only documents in `/data` directory are in-scope. Anything else is out-of-context.
-
-## API endpoints (from spec.md)
-
-- `POST /api/v1/chat/query` — RAG query (session_id optional, auto-creates session)
-- `POST /api/v1/chat/fallback` — Google Search fallback
-- `POST /api/v1/documents/upload` — multipart upload (202 Accepted)
-- `GET /api/v1/documents` — list documents
-- `DELETE /api/v1/documents/{document_id}` — delete doc + vectors
-
-## Developer commands
+## Quick start
 
 ```bash
-# Start all services
-docker compose up --build
+# Prerequisites: Ollama running on host with OLLAMA_HOST=0.0.0.0
+ollama pull nomic-embed-text
+ollama pull qwen2.5:7b
 
-# Run backend tests
-cd backend && python -m pytest tests/ -v
+# Create .env (copy from .env.example, fill GROQ_API_KEY for fallback)
+cp .env.example .env
 
-# Run specific test
-python -m pytest tests/test_chunking.py -v
+# Start
+docker compose up --build -d        # 5 services
+docker compose down                 # stop, keep data
+docker compose down -v              # stop + wipe ALL data
 ```
+
+## Architecture (key facts an agent would miss)
+
+### LLM Provider abstraction
+- Config at `backend/app/services/llm_client.py` — `OllamaProvider` + `GroqProvider` + factory `get_llm()`
+- Switch via env `LLM_PROVIDER=ollama|groq` (default: ollama)
+- **Ollama auto-falls back to Groq** after 2 failures — no crash if Ollama is down
+- `qwen3.5:4b` is a **thinking model** (slow, 29s greeting) — use `qwen2.5:7b` instead
+- `qwen-2.5-32b` on Groq is **decommissioned** — use `llama-3.1-8b-instant`
+
+### RAG pipeline latency (per query, on CPU)
+- rewrite_query: 2-3s (LLM call, skipped if no history)
+- embed query: 0.08s
+- rerank_chunks: skipped if ≤5 candidates, else 5-8s (LLM call)
+- generate_response: 5-15s (LLM call with context)
+- **~10-25s total** with Ollama, **~8-40s** if falling back to Groq
+
+### Embedding model threshold
+- `dengcao/Qwen3-Embedding-0.6B` is the primary embedding model — outputs 1024 dims. It is highly optimized for Bahasa Indonesia.
+- **Effective threshold: 0.40** (not the default 0.55 in config).
+- If switching models, a full Qdrant re-index (`docker compose down -v`) is mandatory.
+
+### SSE streaming is broken
+- uvicorn has chunked-encoding issues with short async generators via `StreamingResponse`
+- **Frontend uses non-streaming** `POST /chat/query` — stable and reliable
+- SSE `POST /chat/stream` exists but may fail on casual/greeting path
+
+### SAEnum gotcha
+- Postgres ENUM stores names (uppercase `PROCESSING`), Python values are lowercase (`processing`)
+- Models use `SAEnum(..., native_enum=False, length=20)` — stored as VARCHAR
+- **ALWAYS pass string literals** (`status="processing"`) not enum members (`DocumentStatus.PROCESSING`)
+
+### UUID columns ≠ strings
+- SQLAlchemy `UUID(as_uuid=True)` returns Python `uuid.UUID` objects — NOT strings
+- Pydantic schema fields typed `str` will reject UUIDs → add `@field_validator("id", mode="before")` to convert
+- `response_model.message_id=str(assistant_msg.id)` — must convert explicitly
+
+### Citation system (chunk-ID based)
+- `format_context_with_ids()` returns `(context_text, chunk_mapping)` — mapping is `{"C1": {...}, "C2": {...}}`
+- System prompt rule 9: LLM must use `[C1]`, `[C2]` for citations
+- `validate_citations()` replaces `[C1]` with `[Sumber: file.pdf]` for user display
+- `is_citation_valid()` checks all `[CX]` exist in mapping — if invalid, regenerate once
+
+### Ingestion worker (separate process)
+- `docker compose` includes a 5th service: **worker** — polls `ingestion_jobs` table every 5s
+- Upload creates `Document(status="queued")` + `IngestionJob` — worker picks up and processes
+- Auto-ingestion on startup also queues jobs (does NOT process directly)
+- Worker uses `SELECT ... FOR UPDATE SKIP LOCKED` for concurrency safety
+- Worker runs `backend/app/worker.py` (standalone, not via FastAPI)
+
+## API endpoints
+
+```
+POST /api/v1/chat/query       — RAG query (non-streaming, stable)
+POST /api/v1/chat/stream      — SSE streaming (may break on short responses)
+POST /api/v1/chat/fallback    — Google search (direct link if API unavailable)
+POST /api/v1/chat/feedback    — thumbs up/down
+POST /api/v1/documents/upload — multipart upload (202, worker ingestion)
+GET  /api/v1/documents        — list (paginated: ?page=1&per_page=50, max 200)
+DELETE /api/v1/documents/{id} — soft delete + Qdrant vector delete
+GET  /health                  — DB + Qdrant connectivity
+```
+
+## Developer commands (run from `backend/`)
+
+```bash
+# Code quality
+make lint          # ruff check .
+make format        # ruff check --fix . && black .
+make typecheck     # mypy app/
+make test          # python -m pytest tests/ -v
+make test-cov      # with coverage report
+
+# Alembic migrations
+python -c "from alembic.config import Config; from alembic import command; cfg=Config('alembic.ini'); command.upgrade(cfg,'head')"
+
+# Debug inside container
+docker compose exec backend python -c "from app.config import SIMILARITY_THRESHOLD; print(SIMILARITY_THRESHOLD)"
+docker compose logs backend -f
+docker compose logs worker -f
+```
+
+- Tests must run from `backend/` directory (use `sys.path.insert`)
+- `test_integration.py` is import checks only — safe without infra
+- `mypy app/` may timeout locally; add `--ignore-missing-imports` to config
+
+## Environment variables (critical ones)
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `LLM_PROVIDER` | ollama | `ollama` or `groq` |
+| `OLLAMA_LLM_MODEL` | qwen2.5:7b | Must NOT be a thinking model |
+| `GROQ_API_KEY` | — | Required only for Groq fallback/provider |
+| `SIMILARITY_THRESHOLD` | 0.55 | **Actually needs 0.40** for nomic-embed-text |
+| `ENABLE_EXTERNAL_FALLBACK` | false | Google CSE; direct link provided if API unavailable |
+| `EMBEDDING_MODEL` | dengcao/Qwen3-Embedding-0.6B | Do NOT change without reindex plan |
+| `EMBEDDING_DIM` | 1024 | Must match Qdrant collection |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | 512/50 | Docker; outside Docker defaults are 200/25 |
+
+## Session and chat quirks
+
+- Expired session → server silently creates **new session** (client must update `session_id`)
+- `_is_casual()` requires exact end-of-string match — "halo apa kabar" is NOT casual
+- `get_history()` returns a **string** (not `list[dict]`) — format: `"User: ...\nAssistant: ..."`
+- `generate_embedding()` has `@lru_cache(maxsize=1000)` — signature changes silently bypass cache
+
+## Known issues (not yet fixed)
+
+| Issue | Workaround |
+|-------|------------|
+| Out-of-scope queries not abstained | Need T4.2 Intent Classifier |
+| Structured extractor rarely triggered | Threshold too low, chunks always found |
+| Google CSE returns 403 | Enable API in Google Cloud Console, or use direct link |
+| SSE chunked encoding broken | Frontend uses non-streaming endpoint |
+| `MessageCitation` may skip invalid UUIDs | Silently skipped (acceptable for citation validation) |

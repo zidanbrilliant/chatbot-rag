@@ -24,11 +24,16 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
 
-def log_interaction(query: str, confidence: float | None, source: str, session_id: str | None = None):
-    logger.info("Interaction logged", extra={
-        "query": query,
-        "confidence": confidence,
-        "source": source,
-        "session_id": session_id,
-        "event": "interaction",
-    })
+def log_interaction(
+    query: str, confidence: float | None, source: str, session_id: str | None = None
+):
+    logger.info(
+        "Interaction logged",
+        extra={
+            "query": query,
+            "confidence": confidence,
+            "source": source,
+            "session_id": session_id,
+            "event": "interaction",
+        },
+    )
