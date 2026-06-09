@@ -6,6 +6,7 @@ psycopg2-binary==2.9.10
 qdrant-client==1.12.1
 groq>=0.9.0
 langchain==0.3.13
+langchain-text-splitters==0.3.4
 langchain-community==0.3.13
 pypdf2==3.0.1
 pdfplumber==0.11.4
@@ -14,5 +15,11 @@ pandas==2.2.3
 openpyxl==3.1.5
 requests==2.32.3
 pydantic==2.10.3
+pydantic-settings>=2.6.0
 httpx>=0.23.0,<0.28
 pytest==8.3.4
+tiktoken>=0.7.0
+alembic>=1.14.0
+python-json-logger==2.0.7
+redis==5.0.3
+prometheus-fastapi-instrumentator==7.0.0

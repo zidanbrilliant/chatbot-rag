@@ -1,9 +1,53 @@
-node_modules/
+# ── Python ──────────────────────────────────────────────
 __pycache__/
-*.pyc
-.env
+*.py[cod]
+*.pyo
 *.egg-info/
 dist/
 build/
+.eggs/
+*.egg
+*.whl
+*.so
+
+# ── Virtual Env ─────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Secrets ─────────────────────────────────────────────
+.env
+*.key
+
+# ── IDE / Editor ────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Node / Frontend ─────────────────────────────────────
+node_modules/
+frontend/node_modules/
+
+# ── Testing / Code Quality ──────────────────────────────
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+*.log
+
+# ── Docker ──────────────────────────────────────────────
 data/
+pgdata/
+qdrant_data/
+
+# ── Project-specific ────────────────────────────────────
+# Debug files
+debug_flow.py
+
+# Note: keep .env.example (placeholder only)
+# Note: keep docs/ (all documentation is versioned)
