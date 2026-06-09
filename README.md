@@ -147,6 +147,44 @@ graph TB
     CFG -->|env vars| RT
 ```
 
+### Arsitektur Non-Teknis (End-to-End)
+
+```mermaid
+flowchart LR
+    subgraph "1. Upload Dokumen"
+        A1[Admin upload<br/>PDF/DOCX/CSV/XLSX] --> A2[Worker otomatis<br/>memproses & mengindex]
+    end
+
+    subgraph "2. Pengguna Bertanya"
+        B1[Karyawan mengetik<br/>pertanyaan] --> B2[Sistem cari<br/>dokumen relevan]
+    end
+
+    subgraph "3. AI Menjawab"
+        B2 --> C1[AI baca dokumen<br/>yang cocok] --> C2[AI rangkum jawaban<br/>+ sebutkan sumbernya]
+    end
+
+    subgraph "4. Hasil"
+        C2 --> D1[Jawaban tampil<br/>di chat + sumber<br/>dari dokumen internal]
+    end
+```
+
+### Alur Sederhana
+
+```
+Pengguna Bertanya
+    │
+    ▼
+AI Periksa: Apakah ini pertanyaan umum? (sapaan)
+    ├── Ya → Jawab langsung
+    │
+    └── Tidak → Cari di dokumen perusahaan
+              │
+              ├── Ditemukan → AI baca, rangkum, sebutkan sumber dokumen
+              │
+              └── Tidak ditemukan → Beritahu pengguna bahwa informasi
+                                    tidak tersedia di knowledge base
+```
+
 ### Database Schema (PostgreSQL)
 
 ```mermaid
@@ -157,15 +195,12 @@ erDiagram
     USERS ||--o{ CHAT_SESSIONS : owns
     USERS ||--o{ FEEDBACK : gives
     USERS ||--o{ AUDIT_LOGS : triggers
-
     DOCUMENTS ||--o{ DOCUMENT_CHUNKS : contains
     DOCUMENTS ||--o{ INGESTION_JOBS : processes
     DOCUMENTS ||--o{ MESSAGE_CITATIONS : referenced
-
     CHAT_SESSIONS ||--o{ CHAT_MESSAGES : has
     CHAT_MESSAGES ||--o{ MESSAGE_CITATIONS : has
     CHAT_MESSAGES ||--o{ FEEDBACK : receives
-
     RAG_EVALUATION_CASES ||--o{ RAG_EVALUATION_RUNS : evaluated
 
     USERS {
@@ -175,6 +210,7 @@ erDiagram
         varchar password_hash
         boolean is_active
         timestamp created_at
+        timestamp updated_at
     }
 
     ROLES {
@@ -183,26 +219,69 @@ erDiagram
         text description
     }
 
+    USER_ROLES {
+        uuid user_id PK
+        uuid role_id PK
+    }
+
     DOCUMENTS {
         uuid id PK
         text original_filename
         text stored_filename
         text file_path
         varchar file_type
+        varchar mime_type
         bigint size_bytes
         varchar document_hash
-        varchar status "uploaded|queued|processing|completed|partial_failed|failed|deleted"
         varchar access_level
+        varchar status
         int version
         uuid uploaded_by FK
+        varchar error_code
+        text error_message
         timestamp created_at
+        timestamp updated_at
+    }
+
+    DOCUMENT_CHUNKS {
+        uuid id PK
+        uuid document_id FK
+        int chunk_index
+        varchar text_hash
+        int page_number
+        varchar sheet_name
+        varchar section_title
+        int token_count
+        uuid qdrant_point_id
+        timestamp created_at
+    }
+
+    INGESTION_JOBS {
+        uuid id PK
+        uuid document_id FK
+        varchar status
+        int attempts
+        int max_attempts
+        varchar error_code
+        text error_message
+        timestamp started_at
+        timestamp finished_at
+        timestamp created_at
+    }
+
+    CHAT_SESSIONS {
+        uuid id PK
+        uuid user_id FK
+        timestamp expires_at
+        timestamp created_at
+        timestamp updated_at
     }
 
     CHAT_MESSAGES {
         uuid id PK
         uuid session_id FK
         uuid user_id FK
-        varchar role "user|assistant"
+        varchar role
         text content
         text query_original
         text query_rewritten
@@ -212,29 +291,54 @@ erDiagram
         timestamp created_at
     }
 
-    INGESTION_JOBS {
+    MESSAGE_CITATIONS {
         uuid id PK
+        uuid message_id FK
+        uuid chunk_id FK
         uuid document_id FK
-        varchar status "queued|processing|completed|failed"
-        int attempts
-        int max_attempts
-        text error_message
+        int quote_start
+        int quote_end
         timestamp created_at
     }
 
-    QDRANT_PAYLOAD {
-        varchar chunk_id UUID
-        varchar document_id UUID
-        varchar file_name
-        varchar source_type
-        int page_number
-        varchar sheet_name
-        varchar section_title
-        int chunk_index
-        text text
-        varchar text_hash SHA256
-        varchar access_level
-        int version
+    FEEDBACK {
+        uuid id PK
+        uuid message_id FK
+        uuid user_id FK
+        varchar feedback
+        text comment
+        timestamp created_at
+    }
+
+    AUDIT_LOGS {
+        uuid id PK
+        uuid actor_user_id FK
+        varchar event_type
+        varchar resource_type
+        uuid resource_id
+        varchar ip_address
+        text user_agent
+        jsonb metadata
+        timestamp created_at
+    }
+
+    RAG_EVALUATION_CASES {
+        uuid id PK
+        text question
+        text expected_answer
+        uuid expected_document_ids
+        uuid expected_chunk_ids
+        varchar category
+        timestamp created_at
+    }
+
+    RAG_EVALUATION_RUNS {
+        uuid id PK
+        uuid case_id FK
+        text answer
+        uuid retrieved_chunk_ids
+        jsonb metrics
+        timestamp created_at
     }
 ```
 
