@@ -345,23 +345,29 @@ def chat_query(req: QueryRequest, db: Session = Depends(get_db)):
         )
 
     context, chunk_mapping = format_context_with_ids(chunks)
-    sources = [
-        Source(
-            file_name=c["file_name"], page_number=c.get("page_number"), row_index=c.get("row_index")
-        )
-        for c in chunks[:TOP_K]
-    ]
 
     try:
         reply = generate_response(SYSTEM_PROMPT, context, history, enriched_query)
     except Exception:
         reply = "Maaf, layanan AI sedang tidak tersedia. Silakan coba lagi nanti."
-
     # ── Citation Validation (chunk-ID based) ─────────
-
-
     clean_reply, citation_data = validate_citations(reply, chunk_mapping)
 
+    # Build deduped sources. Priority: actual LLM citations, fallback to chunk file names
+    seen_files = set()
+    sources = []
+    for cit in citation_data:
+        fn = cit.get("file_name", "")
+        if fn and fn not in seen_files:
+            seen_files.add(fn)
+            sources.append(Source(file_name=fn))
+
+    if not sources:
+        for c in chunks[:TOP_K]:
+            fn = c.get("file_name", "")
+            if fn and fn not in seen_files:
+                seen_files.add(fn)
+                sources.append(Source(file_name=fn))
     # Save to DB
     assistant_msg = ChatMessage(session_id=session.session_id, role="assistant", content=clean_reply)
     db.add(assistant_msg)
