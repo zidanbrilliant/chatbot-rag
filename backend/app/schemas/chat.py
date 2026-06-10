@@ -7,9 +7,12 @@ class QueryRequest(BaseModel):
 
 
 class Source(BaseModel):
-    file_name: str
+    file_name: str | None = None
     page_number: int | None = None
     row_index: int | None = None
+    source_type: str = "internal"
+    url: str | None = None
+    title: str | None = None
 
 
 class QueryResponse(BaseModel):

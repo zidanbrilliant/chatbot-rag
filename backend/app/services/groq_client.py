@@ -114,6 +114,98 @@ def format_context_with_ids(chunks: list[dict], max_tokens: int = 2000) -> tuple
     return _build_context(chunks, max_tokens)
 
 
+def format_hybrid_context(
+    internal_chunks: list[dict],
+    web_results: list[dict],
+    max_tokens: int = 2000,
+) -> tuple[str, dict[str, dict]]:
+    """Format internal chunks + web results with dual labels.
+
+    Returns (context_text, mapping) where:
+    - mapping has "C1", "C2"... for internal chunks (source_type="internal")
+    - mapping has "W1", "W2"... for web results (source_type="external")
+    """
+    parts = []
+    mapping: dict[str, dict] = {}
+    budget = max_tokens
+
+    for i, chunk in enumerate(internal_chunks):
+        cid = f"C{i + 1}"
+        content = chunk.get("content", "")
+        file_name = chunk.get("file_name", "")
+        page = chunk.get("page_number")
+        row = chunk.get("row_index")
+
+        header = f"[CHUNK {cid}]"
+        source_label = f"File: {file_name}"
+        if page:
+            source_label += f" | Halaman: {page}"
+        if row is not None:
+            source_label += f" | Baris: {row}"
+
+        block = f"{header}\n{source_label}\n{content}"
+        estimated = len(block) // 4
+        if estimated > budget:
+            if budget > 0:
+                allowed_chars = budget * 4
+                block = f"{header}\n{source_label}\n{content[:allowed_chars]}..."
+                parts.append(block)
+                mapping[cid] = {
+                    "file_name": file_name,
+                    "page_number": page,
+                    "row_index": row,
+                    "chunk_id": chunk.get("chunk_id", cid),
+                    "document_id": chunk.get("document_id", ""),
+                    "source_type": "internal",
+                }
+            break
+
+        parts.append(block)
+        budget -= estimated
+        mapping[cid] = {
+            "file_name": file_name,
+            "page_number": page,
+            "row_index": row,
+            "chunk_id": chunk.get("chunk_id", cid),
+            "document_id": chunk.get("document_id", ""),
+            "source_type": "internal",
+        }
+
+    for i, result in enumerate(web_results):
+        wid = f"W{i + 1}"
+        title = result.get("title", "")
+        url = result.get("url", "")
+        snippet = result.get("snippet", "")
+
+        header = f"[WEB {wid}]"
+        source_label = f"Title: {title}\nURL: {url}"
+        source_type_label = "Sumber: Eksternal (Web)"
+
+        block = f"{header}\n{source_label}\n{source_type_label}\n{snippet}"
+        estimated = len(block) // 4
+        if estimated > budget:
+            if budget > 0:
+                allowed_chars = budget * 4
+                block = f"{header}\n{source_label}\n{source_type_label}\n{snippet[:allowed_chars]}..."
+                parts.append(block)
+                mapping[wid] = {
+                    "title": title,
+                    "url": url,
+                    "source_type": "external",
+                }
+            break
+
+        parts.append(block)
+        budget -= estimated
+        mapping[wid] = {
+            "title": title,
+            "url": url,
+            "source_type": "external",
+        }
+
+    return "\n\n".join(parts), mapping
+
+
 def _build_context(chunks: list[dict], max_tokens: int) -> tuple[str, dict[str, dict]]:
     """Build numbered chunk context with ID mapping."""
     parts = []
@@ -220,12 +312,11 @@ def validate_citations(
 ) -> tuple[str, list[dict]]:
     """Validate and reformat chunk-ID citations in LLM reply.
 
-    Checks for patterns like [C1], [C2] in the reply text.
+    Checks for patterns like [C1], [C2] (internal) and [W1], [W2] (external) in the reply text.
     Validates they exist in chunk_mapping.
-    Replaces [C1] with proper source labels.
+    Removes citations from text (frontend displays sources separately).
 
     Returns (clean_reply, citations_list).
-    citations_list = [{"chunk_id": "...", "file_name": "...", "label": "C1"}, ...]
     """
     import re as _re
 
@@ -233,31 +324,31 @@ def validate_citations(
     if not chunk_mapping:
         return reply, citations
 
-    # Find all [CX] patterns
-    pattern = _re.compile(r"\[C(\d+)\]")
+    pattern = _re.compile(r"\[([CW]\d+)\]")
     found = pattern.findall(reply)
 
     seen = set()
-    for num_str in found:
-        cid = f"C{num_str}"
-        if cid in seen:
+    for label in found:
+        if label in seen:
             continue
-        seen.add(cid)
-        chunk_info = chunk_mapping.get(cid)
-        if chunk_info:
+        seen.add(label)
+        info = chunk_mapping.get(label)
+        if info:
             citations.append(
                 {
-                    "label": cid,
-                    "file_name": chunk_info.get("file_name", ""),
-                    "page_number": chunk_info.get("page_number"),
-                    "row_index": chunk_info.get("row_index"),
-                    "chunk_id": chunk_info.get("chunk_id", cid),
-                    "document_id": chunk_info.get("document_id", ""),
+                    "label": label,
+                    "file_name": info.get("file_name", ""),
+                    "page_number": info.get("page_number"),
+                    "row_index": info.get("row_index"),
+                    "chunk_id": info.get("chunk_id", label),
+                    "document_id": info.get("document_id", ""),
+                    "source_type": info.get("source_type", "internal"),
+                    "url": info.get("url"),
+                    "title": info.get("title"),
                 }
             )
 
-    # Remove citations from the text completely since frontend displays sources separately
-    clean_reply = _re.sub(r"\s*\[C\d+\](?:\s*\[C\d+\])*", "", reply)
+    clean_reply = _re.sub(r"\s*\[[CW]\d+\](?:\s*\[[CW]\d+\])*", "", reply)
     return clean_reply, citations
 
 
@@ -266,16 +357,15 @@ def is_citation_valid(reply: str, chunk_mapping: dict[str, dict]) -> bool:
     import re as _re
 
     if not chunk_mapping:
-        return True  # no mapping = no validation needed
-
-    found = _re.findall(r"\[C(\d+)\]", reply)
-    if not found:
-        # No explicit citations found - check if context suggests citations needed
         return True
 
-    for num_str in found:
-        if f"C{num_str}" not in chunk_mapping:
-            logger.warning("Invalid citation: C%s not in mapping", num_str)
+    found = _re.findall(r"\[([CW]\d+)\]", reply)
+    if not found:
+        return True
+
+    for label in found:
+        if label not in chunk_mapping:
+            logger.warning("Invalid citation: %s not in mapping", label)
             return False
     return True
 

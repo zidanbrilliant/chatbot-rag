@@ -5,6 +5,11 @@ services:
     build: ./backend
     ports:
       - "8000:8000"
+    extra_hosts:
+      - "duckduckgo.com:104.18.32.47"
+      - "www.duckduckgo.com:104.18.32.47"
+      - "html.duckduckgo.com:104.18.32.47"
+      - "lite.duckduckgo.com:104.18.32.47"
     environment:
       - APP_ENV=${APP_ENV:-development}
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/chatbot
@@ -51,6 +56,11 @@ services:
   worker:
     build: ./backend
     command: python -m app.worker
+    extra_hosts:
+      - "duckduckgo.com:104.18.32.47"
+      - "www.duckduckgo.com:104.18.32.47"
+      - "html.duckduckgo.com:104.18.32.47"
+      - "lite.duckduckgo.com:104.18.32.47"
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/chatbot
       - QDRANT_HOST=qdrant

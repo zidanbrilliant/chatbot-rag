@@ -57,6 +57,7 @@ export function sendQueryStream(sessionId, query, onToken, onDone, onError) {
 }
 
 export function sendFallback(sessionId, query) {
+  // Deprecated: hybrid search now integrated into /chat/query
   return api.post('/chat/fallback', { session_id: sessionId, query })
 }
 

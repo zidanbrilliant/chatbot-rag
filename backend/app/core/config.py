@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     google_cse_id: str = Field("")
     enable_external_fallback: bool = Field(False)
 
+    # ── Web Search (Hybrid RAG) ─────────────────────────
+    enable_web_search: bool = Field(True)
+    search_provider: str = Field("duckduckgo", description="duckduckgo | tavily")
+    search_max_results: int = Field(5)
+    search_timeout: int = Field(10)
+    search_cache_ttl: int = Field(3600)
+    tavily_api_key: str = Field("")
+
     # ── CORS ─────────────────────────────────────────────
     cors_origins: str = Field("http://localhost:3000,http://localhost:5173")
 
@@ -150,3 +158,9 @@ ADMIN_API_KEY = _settings.admin_api_key
 REDIS_URL = _settings.redis_url
 VECTOR_SIZE = _settings.vector_size
 MAX_HISTORY_TURNS = _settings.max_history_turns
+ENABLE_WEB_SEARCH = _settings.enable_web_search
+SEARCH_PROVIDER = _settings.search_provider
+SEARCH_MAX_RESULTS = _settings.search_max_results
+SEARCH_TIMEOUT = _settings.search_timeout
+SEARCH_CACHE_TTL = _settings.search_cache_ttl
+TAVILY_API_KEY = _settings.tavily_api_key

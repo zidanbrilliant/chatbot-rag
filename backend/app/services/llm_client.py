@@ -320,6 +320,7 @@ from app.services.groq_client import (  # noqa: E402, F401
     expand_synonyms,
     format_context,
     format_context_with_ids,
+    format_hybrid_context,
     insert_citations,
     is_citation_valid,
     validate_citations,

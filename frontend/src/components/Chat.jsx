@@ -1,12 +1,11 @@
 import React, { useState, useRef, useEffect } from "react";
-import { sendQuery, sendFallback } from "../api";
+import { sendQuery } from "../api";
 
 export default function Chat() {
   const [sessionId, setSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [pendingFallback, setPendingFallback] = useState(null);
   const [error, setError] = useState(null);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
@@ -28,7 +27,6 @@ export default function Chat() {
     setLoading(true);
     setError(null);
     setMessages((prev) => [...prev, { role: "user", content: q }]);
-    // placeholder untuk loading indicator
     setMessages((prev) => [
       ...prev,
       { role: "assistant", content: "", _streaming: true, sources: [] },
@@ -38,10 +36,6 @@ export default function Chat() {
       const res = await sendQuery(sessionId, q);
       const data = res.data;
       if (data.session_id) setSessionId(data.session_id);
-      if (data.fallback_triggered) {
-        setPendingFallback({ sessionId: data.session_id, query: q });
-      }
-      // replace placeholder with final response
       setMessages((prev) => {
         const updated = [...prev];
         for (let i = updated.length - 1; i >= 0; i--) {
@@ -76,36 +70,9 @@ export default function Chat() {
     focusInput();
   }
 
-  async function handleFallback(confirm) {
-    if (!pendingFallback) return;
-    if (!confirm) {
-      setPendingFallback(null);
-      focusInput();
-      return;
-    }
-    setLoading(true);
-    setPendingFallback(null);
-    try {
-      const res = await sendFallback(pendingFallback.sessionId, pendingFallback.query);
-      const data = res.data;
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: data.reply, external_sources: data.external_sources, external: true },
-      ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "Pencarian Google gagal.", external: true },
-      ]);
-    }
-    setLoading(false);
-    focusInput();
-  }
-
   function newChat() {
     setSessionId(null);
     setMessages([]);
-    setPendingFallback(null);
     setError(null);
     focusInput();
   }
@@ -131,14 +98,14 @@ export default function Chat() {
           <div className="welcome-card">
             <div className="welcome-icon">🤖</div>
             <h3>Halo! 👋</h3>
-            <p>Aku asisten AI untuk mencari informasi dari dokumen yang sudah di-upload.</p>
-            <p className="welcome-hint">Tanyakan apa saja seputar isi dokumen yang tersedia.</p>
+            <p>Aku asisten AI untuk mencari informasi dari dokumen dan sumber online.</p>
+            <p className="welcome-hint">Tanyakan apa saja — aku akan cari dari knowledge base dan web.</p>
           </div>
         )}
 
         {messages.map((m, i) => (
           <div key={i} className={`message ${m.role}`}>
-            <div className={`bubble ${m.external ? "bubble-external" : ""}`}>
+            <div className="bubble">
               {m.content}
               {m._streaming && m.content.length === 0 && (
                 <span className="typing-dots">
@@ -149,17 +116,24 @@ export default function Chat() {
               )}
               {m.sources && m.sources.length > 0 && !m._streaming && (
                 <div className="sources">
-                  <small>Sumber: {m.sources.map((s) => s.file_name).join(", ")}</small>
-                </div>
-              )}
-              {m.external_sources && m.external_sources.length > 0 && (
-                <div className="sources">
-                  <span className="badge">Sumber Eksternal</span>
-                  {m.external_sources.map((s, j) => (
-                    <div key={j}>
-                      <a href={s.url} target="_blank" rel="noreferrer">{s.title}</a>
+                  {m.sources.filter(s => s.source_type === "internal").length > 0 && (
+                    <div className="source-group">
+                      <span className="badge badge-internal">📁 Knowledge Base</span>
+                      {m.sources.filter(s => s.source_type === "internal").map((s, j) => (
+                        <span key={j} className="source-item">{s.file_name}</span>
+                      ))}
                     </div>
-                  ))}
+                  )}
+                  {m.sources.filter(s => s.source_type === "external").length > 0 && (
+                    <div className="source-group">
+                      <span className="badge badge-external">🌐 Web</span>
+                      {m.sources.filter(s => s.source_type === "external").map((s, j) => (
+                        <a key={j} href={s.url} target="_blank" rel="noreferrer" className="source-item source-link">
+                          {s.title || s.url}
+                        </a>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -169,14 +143,6 @@ export default function Chat() {
         {error && (
           <div className="message assistant">
             <div className="bubble bubble-error">{error}</div>
-          </div>
-        )}
-
-        {pendingFallback && (
-          <div className="fallback-prompt">
-            <p>Informasi tidak ditemukan di knowledge base.<br />Cari dari Google?</p>
-            <button onClick={() => handleFallback(true)} className="btn-yes">Ya, cari di Google</button>
-            <button onClick={() => handleFallback(false)} className="btn-no">Tidak</button>
           </div>
         )}
 
