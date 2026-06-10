@@ -154,3 +154,13 @@ docker compose logs worker -f
 | Google CSE returns 403 | Enable API in Google Cloud Console, or use direct link |
 | SSE chunked encoding broken | Frontend uses non-streaming endpoint |
 | `MessageCitation` may skip invalid UUIDs | Silently skipped (acceptable for citation validation) |
+
+## Worker quirks
+
+- **FOR UPDATE deadlock**: `run_worker()` main loop acquires `SELECT ... FOR UPDATE SKIP LOCKED` on a job row, then calls `process_job()` which opens its OWN session and tries to UPDATE the same row. Two sessions compete for the same row lock → deadlock. Fixed by `db.commit()` in main loop BEFORE calling process_job, releasing the lock.
+- **SAEnum case sensitivity**: `native_enum=False` stores enum **names** (uppercase `QUEUED`, `PROCESSING`, `COMPLETED`), NOT values (lowercase `queued`). This means:
+  - Raw SQL `INSERT ... 'queued'` stores lowercase → worker filter `WHERE status = 'QUEUED'` WON'T MATCH
+  - **ALWAYS uppercase status values in raw SQL**: `'QUEUED'`, `'COMPLETED'`
+  - SAEnum + str enum automatically convert string literals to uppercase when inserting via ORM
+  - The worker `process_job()` uses `IngestionJobStatus.QUEUED` (enum member) → SAEnum serializes to `'QUEUED'` correctly
+- **Auto-ingest duplicates**: Every container restart scans `/data/` and creates new Document+IngestionJob records. The skip filter `status == COMPLETED` only skips completed files. Failed/queued files get duplicated on every restart. Fixed filter to also skip existing QUEUED/PROCESSING records.

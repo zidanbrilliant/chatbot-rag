@@ -172,6 +172,7 @@ def run_worker():
 
             if job:
                 logger.info("Picked up job %s (doc=%s)", job.id, job.document_id)
+                db.commit()  # Release FOR UPDATE lock before process_job opens its own session
                 process_job(str(job.id))
             else:
                 # No jobs — sleep

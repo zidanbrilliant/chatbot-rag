@@ -148,13 +148,21 @@ def auto_ingest_data_dir():
             continue
         db = SessionLocal()
         try:
-            # Skip if already ingested
+            # Skip if already has active record (completed, queued, or processing)
             existing = (
                 db.query(Document)
-                .filter(Document.original_filename == entry, Document.status == DocumentStatus.COMPLETED)
+                .filter(
+                    Document.original_filename == entry,
+                    Document.status.in_([
+                        DocumentStatus.COMPLETED,
+                        DocumentStatus.QUEUED,
+                        DocumentStatus.PROCESSING,
+                    ]),
+                )
                 .first()
             )
             if existing:
+                logger.debug("Skipped %s (existing status=%s)", entry, existing.status.value)
                 continue
             ext = Path(entry).suffix.lower().lstrip(".")
             doc_id = str(uuid_lib.uuid4())

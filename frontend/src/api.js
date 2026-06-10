@@ -71,8 +71,8 @@ export function uploadDocument(file) {
   })
 }
 
-export function listDocuments() {
-  return api.get('/documents', {
+export function listDocuments(page = 1, perPage = 50) {
+  return api.get(`/documents?page=${page}&per_page=${perPage}`, {
     headers: { 'X-API-Key': 'supersecret' }
   })
 }
