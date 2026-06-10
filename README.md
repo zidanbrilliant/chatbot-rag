@@ -168,22 +168,56 @@ flowchart LR
     end
 ```
 
-### Alur Sederhana
+### Alur End-to-End Sistem
 
+Berikut alur lengkap dari dokumen diupload hingga pengguna mendapat jawaban:
+
+```mermaid
+flowchart LR
+    subgraph A["① Upload & Processing"]
+        direction TB
+        A1["Admin upload<br/>PDF / DOCX / CSV / XLSX"] --> A2["Worker otomatis:<br/>parse → chunk → embed → index"]
+        A2 --> A3["Dokumen siap di-<br/>knowledge base"]
+    end
+
+    subgraph B["② Pengguna Bertanya"]
+        direction TB
+        B1["Ketik pertanyaan<br/>di chat"] --> B2["Sistem periksa:<br/>sapaan umum?"]
+        B2 -->|"Ya"| B3["Jawab langsung<br/>(tanpa cari dokumen)"]
+        B2 -->|"Tidak"| B4["Perjelas pertanyaan<br/>(rewrite jika ada<br/>riwayat chat)"]
+        B4 --> B5["Cari di knowledge base<br/>(embedding + semantic search)"]
+    end
+
+    subgraph C["③ AI Analisis"]
+        direction TB
+        C0["Hasil pencarian<br/>dari Qdrant"] --> C1["Apakah hasil cukup<br/>relevan?"]
+        C1 -->|"Tidak"| C2["Beri tahu pengguna:<br/>info tidak ditemukan"]
+        C1 -->|"Ya"| C3["Filter & urutkan<br/>chunk paling relevan"]
+        C3 --> C4["Kirim context +<br/>pertanyaan ke AI"]
+    end
+
+    subgraph D["④ Jawaban"]
+        direction TB
+        C4 --> D1["AI baca context,<br/>rangkum jawaban"]
+        D1 --> D2["Validasi: semua<br/>sumber yang disebut<br/> benar-benar ada?"]
+        D2 -->|"Valid"| D3["Tampilkan jawaban<br/>+ sumber dokumen<br/>di chat"]
+        D2 -->|"Tidak valid"| D4["AI generate ulang<br/>dengan instruksi<br/>lebih ketat"]
+        D4 --> D2
+    end
+
+    A3 -.->|"data tersedia"| B5
+    B3 --> D3
+    C2 --> D3
 ```
-Pengguna Bertanya
-    │
-    ▼
-AI Periksa: Apakah ini pertanyaan umum? (sapaan)
-    ├── Ya → Jawab langsung
-    │
-    └── Tidak → Cari di dokumen perusahaan
-              │
-              ├── Ditemukan → AI baca, rangkum, sebutkan sumber dokumen
-              │
-              └── Tidak ditemukan → Beritahu pengguna bahwa informasi
-                                    tidak tersedia di knowledge base
-```
+
+**Penjelasan langkah-langkahnya:**
+
+1. **Upload** — Admin upload file (PDF/DOCX/CSV/XLSX) lewat panel admin. Worker langsung memproses di latar belakang: membaca teks, memotong jadi segmen kecil (chunk), mengubahnya menjadi vector, dan menyimpannya di database vector.
+2. **Pertanyaan** — Pengguna mengetik pertanyaan. Sistem cek apakah ini sapaan (halo, hai) atau pertanyaan serius. Kalau sapaan, jawab langsung. Kalau serius, pertanyaan diperjelas jika ada riwayat chat sebelumnya.
+3. **Pencarian** — Pertanyaan diubah menjadi vector, lalu dicocokkan dengan semua chunk dokumen di database. Sistem ambil chunk paling relevan dan kirim ke AI sebagai konteks.
+4. **Analisis AI** — AI membaca konteks, mengecek apakah informasinya cukup. Jika tidak cukup, bilang "tidak ditemukan". Jika cukup, AI rangkum jawaban plus sebutkan sumbernya.
+5. **Validasi** — Sistem periksa apakah sumber yang disebut AI benar-benar ada di database. Jika ada, tampilkan ke pengguna. Jika tidak, AI diminta generate ulang.
+6. **Hasil** — Jawaban muncul di chat beserta nama file sumbernya. Pengguna bisa kasih feedback (like/dislike).
 
 ### Database Schema (PostgreSQL)
 
@@ -581,16 +615,6 @@ Response:
 | **Chunk-ID citation** | Bukan semantic similarity post-hoc. LLM diminta pakai `[C1]`, `[C2]` — divalidasi regex |
 | **Ollama auto-fallback Groq** | 2 retry ke Ollama → otomatis switch ke Groq. Zero down time |
 | **UUID columns** | SQLAlchemy `UUID(as_uuid=True)` return Python UUID. Schema Pydantic butuh `field_validator("id", mode="before")` untuk convert ke string |
-
-## Dokumentasi Referensi
-
-| File | Deskripsi |
-|------|-----------|
-| `docs/prd.md` | Product requirements |
-| `docs/task.md` | 25 dev tasks across 5 milestones |
-| `docs/audit-report.md` | Gap analysis vs PRD |
-| `docs/AI_CODING_GUARDRAILS.md` | AI coding rules |
-| `AGENTS.md` | Instructions for AI coding assistant |
 
 ## Developer Commands
 

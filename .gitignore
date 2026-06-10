@@ -49,5 +49,8 @@ qdrant_data/
 # Debug files
 debug_flow.py
 
+# Internal docs (not part of public repo)
+docs/
+AGENTS.md
+
 # Note: keep .env.example (placeholder only)
-# Note: keep docs/ (all documentation is versioned)
