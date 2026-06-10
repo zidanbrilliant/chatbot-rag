@@ -1,6 +1,8 @@
-# Chatbot RAG — Internal Knowledge Base
+# Chatbot RAG — Hybrid Internal + Web Search
 
-Chatbot berbasis **Retrieval-Augmented Generation (RAG)** untuk knowledge base internal. Mendukung PDF, DOCX, CSV, dan XLSX — 100% lokal via **Ollama + bge-m3 + qwen2.5:7b** dengan **Groq auto-fallback**.
+Chatbot berbasis **Retrieval-Augmented Generation (RAG)** dengan hybrid search — mencari dari dokumen internal (PDF, DOCX, CSV, XLSX) DAN dari web secara paralel. Menggunakan **Groq** sebagai LLM utama (cloud, cepat) dan **Ollama + bge-m3** untuk embedding lokal.
+
+---
 
 ## Tech Stack
 
@@ -10,22 +12,24 @@ Chatbot berbasis **Retrieval-Augmented Generation (RAG)** untuk knowledge base i
 | Frontend | React 18 + Vite |
 | Vector DB | Qdrant v1.12.1 (1024-dim Cosine) |
 | Relational DB | PostgreSQL 16 |
-| Emebedding | `bge-m3` via Ollama (multilingual) |
-| LLM | `qwen2.5:7b` via Ollama (Groq fallback) |
+| Cache | Redis 7 |
+| Embedding | `bge-m3` via Ollama (lokal, GPU) |
+| LLM | **Groq** `llama-3.1-8b-instant` (cloud) |
+| Web Search | DuckDuckGo (gratis, no API key) |
 | Chunking | LangChain `RecursiveCharacterTextSplitter` |
 | Container | Docker Compose (6 services) |
+
+---
 
 ## Quick Start
 
 ```bash
-# 1. Prerequisites: Ollama running on host
-ollama serve
+# 1. Prerequisites: Ollama running on host with GPU
 ollama pull bge-m3
-ollama pull qwen2.5:7b
 
 # 2. Setup environment
 cp .env.example .env
-# Isi: GROQ_API_KEY=... (untuk fallback opsional)
+# Isi GROQ_API_KEY (required untuk LLM provider)
 
 # 3. Start all services
 docker compose up --build -d
@@ -33,6 +37,8 @@ docker compose up --build -d
 # 4. Buka browser
 open http://localhost:3000
 ```
+
+---
 
 ## Architecture
 
@@ -42,10 +48,7 @@ open http://localhost:3000
 graph TB
     subgraph "Host Machine"
         OLLAMA[Ollama Server<br/>:11434]
-        subgraph "Ollama Models"
-            EMD[bge-m3<br/>Embedding]
-            LLM[qwen2.5:7b<br/>LLM]
-        end
+        EMD[bge-m3<br/>Embedding Model]
         DATA[./data<br/>Uploaded Files]
     end
 
@@ -54,19 +57,27 @@ graph TB
         BE[Backend<br/>FastAPI<br/>:8000]
         WK[Worker<br/>Ingestion<br/>-- polling 5s --]
         DB[(PostgreSQL<br/>:5432)]
-        QD[(Qdrant<br/>:6333 gRPC<br/>:6334 HTTP)]
+        QD[(Qdrant<br/>:6333 gRPC)]
+        RD[(Redis<br/>:6379)]
+    end
+
+    subgraph "Cloud"
+        GR["api.groq.com<br/>Groq LLM"]
+        WWW["DuckDuckGo<br/>Web Search"]
     end
 
     FE -->|/api/v1/*| BE
-    BE -->|search / upsert| QD
     BE -->|CRUD| DB
-    WK -->|SELECT ... FOR UPDATE| DB
+    BE -->|search / upsert| QD
+    BE -->|cache web results| RD
+    BE -->|/api/chat| GR
+    BE -->|embed query| OLLAMA
+    BE -->|search web| WWW
+    WK -->|poll job| DB
     WK -->|upsert vectors| QD
-    BE -->|/api/chat| OLLAMA
-    WK -->|/api/embeddings| OLLAMA
+    WK -->|embed chunks| OLLAMA
     BE -->|uploads file| DATA
     WK ---|reads file| DATA
-    DATA -.-|bind mount| DATA
 ```
 
 ### Services
@@ -74,33 +85,12 @@ graph TB
 | Service | Port | Platform | Role |
 |---------|------|----------|------|
 | `frontend` | 3000 | Node + Vite (React 18) | Web UI |
-| `backend` | 8000 | Python 3.10 + FastAPI | REST API, RAG orchestration |
+| `backend` | 8000 | Python 3.10 + FastAPI | REST API, RAG + hybrid search orchestration |
 | `worker` | — | Python 3.10 (standalone) | Background ingestion (polling 5s) |
 | `db` | 5432 | PostgreSQL 16 | Metadata, sessions, feedback, audit |
 | `qdrant` | 6333/6334 | Qdrant v1.12.1 | Vector storage (1024-dim Cosine) |
-| `ollama` | 11434 | Host machine (NOT containerized) | Embedding (`bge-m3`) + LLM (`qwen2.5:7b`) |
-
-### Container Network Diagram
-
-```mermaid
-flowchart LR
-    FE[":3000<br/>React"]
-    BE[":8000<br/>FastAPI"]
-    DB[":5432<br/>PostgreSQL"]
-    QD[":6333/:6334<br/>Qdrant"]
-    WK["Worker<br/>Polling"]
-    OL[":11434<br/>Ollama<br/>(Host)"]
-    GR["api.groq.com<br/>Groq<br/>(Cloud)"]
-
-    FE -->|HTTP proxy| BE
-    BE -->|SQLAlchemy| DB
-    BE -->|gRPC| QD
-    BE -->|REST API| OL
-    BE -->|REST API| GR
-    WK -->|poll job| DB
-    WK -->|upsert vectors| QD
-    WK -->|embed chunks| OL
-```
+| `redis` | 6379 | Redis 7 | Web search cache, rate limiting |
+| `ollama` | 11434 | Host machine (NOT containerized) | Embedding only (`bge-m3`) |
 
 ### Component Architecture (Backend)
 
@@ -123,13 +113,22 @@ graph TB
         ANS[Answerability Gate<br/>answerability.py]
         STR[Structured Extractor<br/>structured_extractor.py]
         SAN[Sanitizer<br/>sanitizer.py]
-        CIRC[Circuit Breaker<br/>circuit_breaker.py]
         SCH[Session Scheduler<br/>scheduler.py]
+        SRC[Search Client<br/>search_client.py]
+        SCA[Search Cache<br/>search_cache.py]
+        AUD[Audit Log<br/>audit_log.py]
     end
 
     subgraph "LLM Providers"
-        OLL[OllamaProvider<br/>Local qwen2.5:7b]
-        GR[GroqProvider<br/>Cloud fallback]
+        OLL[OllamaProvider<br/>Local fallback]
+        GR[GroqProvider<br/>Primary LLM]
+    end
+
+    subgraph "External"
+        QD[(Qdrant)]
+        DB[(PostgreSQL)]
+        RD[(Redis)]
+        DDG[DuckDuckGo<br/>Web Search]
     end
 
     RT --> SR
@@ -141,8 +140,15 @@ graph TB
     SR --> ANS
     SR --> STR
     SR --> SAN
-    LLM --> OLL
+    SR --> SRC
+    SRC --> SCA
+    SRC --> DDG
+    SCA --> RD
+    SR --> AUD
     LLM --> GR
+    LLM --> OLL
+    QDR --> QD
+    SR --> DB
     CFG -->|env vars| SR
     CFG -->|env vars| RT
 ```
@@ -156,21 +162,20 @@ flowchart LR
     end
 
     subgraph "2. Pengguna Bertanya"
-        B1[Karyawan mengetik<br/>pertanyaan] --> B2[Sistem cari<br/>dokumen relevan]
+        B1[Karyawan mengetik<br/>pertanyaan] --> B2[Sistem cari<br/>dokumen internal] & B3[Sistem cari<br/>di web]
     end
 
     subgraph "3. AI Menjawab"
-        B2 --> C1[AI baca dokumen<br/>yang cocok] --> C2[AI rangkum jawaban<br/>+ sebutkan sumbernya]
+        B2 & B3 --> C1[AI baca semua<br/>sumber internal + web]
+        C1 --> C2[AI rangkum jawaban<br/>+ sebutkan sumbernya]
     end
 
     subgraph "4. Hasil"
-        C2 --> D1[Jawaban tampil<br/>di chat + sumber<br/>dari dokumen internal]
+        C2 --> D1[Jawaban tampil<br/>di chat + sumber<br/>📁 Knowledge Base + 🌐 Web]
     end
 ```
 
 ### Alur End-to-End Sistem
-
-Berikut alur lengkap dari dokumen diupload hingga pengguna mendapat jawaban:
 
 ```mermaid
 flowchart LR
@@ -185,39 +190,163 @@ flowchart LR
         B1["Ketik pertanyaan<br/>di chat"] --> B2["Sistem periksa:<br/>sapaan umum?"]
         B2 -->|"Ya"| B3["Jawab langsung<br/>(tanpa cari dokumen)"]
         B2 -->|"Tidak"| B4["Perjelas pertanyaan<br/>(rewrite jika ada<br/>riwayat chat)"]
-        B4 --> B5["Cari di knowledge base<br/>(embedding + semantic search)"]
+        B4 --> B5["Cari di internal<br/>+ web secara<br/>PARALEL"]
     end
 
     subgraph C["③ AI Analisis"]
         direction TB
-        C0["Hasil pencarian<br/>dari Qdrant"] --> C1["Apakah hasil cukup<br/>relevan?"]
-        C1 -->|"Tidak"| C2["Beri tahu pengguna:<br/>info tidak ditemukan"]
-        C1 -->|"Ya"| C3["Filter & urutkan<br/>chunk paling relevan"]
-        C3 --> C4["Kirim context +<br/>pertanyaan ke AI"]
+        C0["Hasil internal<br/>(Qdrant) + web<br/>(DuckDuckGo)"] --> C1["Gabung context<br/>dengan label:<br/>[C1] internal<br/>[W1] web"]
+        C1 --> C2["Kirim context +<br/>pertanyaan ke AI<br/>(Groq)"]
     end
 
     subgraph D["④ Jawaban"]
         direction TB
-        C4 --> D1["AI baca context,<br/>rangkum jawaban"]
+        C2 --> D1["AI baca context,<br/>rangkum jawaban"]
         D1 --> D2["Validasi: semua<br/>sumber yang disebut<br/> benar-benar ada?"]
-        D2 -->|"Valid"| D3["Tampilkan jawaban<br/>+ sumber dokumen<br/>di chat"]
+        D2 -->|"Valid"| D3["Tampilkan jawaban<br/>+ sumber internal<br/>📁 + web 🌐<br/>di chat"]
         D2 -->|"Tidak valid"| D4["AI generate ulang<br/>dengan instruksi<br/>lebih ketat"]
         D4 --> D2
     end
 
     A3 -.->|"data tersedia"| B5
     B3 --> D3
-    C2 --> D3
 ```
 
 **Penjelasan langkah-langkahnya:**
 
-1. **Upload** — Admin upload file (PDF/DOCX/CSV/XLSX) lewat panel admin. Worker langsung memproses di latar belakang: membaca teks, memotong jadi segmen kecil (chunk), mengubahnya menjadi vector, dan menyimpannya di database vector.
-2. **Pertanyaan** — Pengguna mengetik pertanyaan. Sistem cek apakah ini sapaan (halo, hai) atau pertanyaan serius. Kalau sapaan, jawab langsung. Kalau serius, pertanyaan diperjelas jika ada riwayat chat sebelumnya.
-3. **Pencarian** — Pertanyaan diubah menjadi vector, lalu dicocokkan dengan semua chunk dokumen di database. Sistem ambil chunk paling relevan dan kirim ke AI sebagai konteks.
-4. **Analisis AI** — AI membaca konteks, mengecek apakah informasinya cukup. Jika tidak cukup, bilang "tidak ditemukan". Jika cukup, AI rangkum jawaban plus sebutkan sumbernya.
-5. **Validasi** — Sistem periksa apakah sumber yang disebut AI benar-benar ada di database. Jika ada, tampilkan ke pengguna. Jika tidak, AI diminta generate ulang.
-6. **Hasil** — Jawaban muncul di chat beserta nama file sumbernya. Pengguna bisa kasih feedback (like/dislike).
+1. **Upload** — Admin upload file (PDF/DOCX/CSV/XLSX) lewat panel admin. Worker langsung memproses di latar belakang: membaca teks, memotong jadi segmen kecil (chunk), mengubahnya menjadi vector, menyimpannya di Qdrant.
+2. **Pertanyaan** — Pengguna mengetik pertanyaan. Sistem cek apakah ini sapaan (halo, hai) atau pertanyaan serius. Kalau serius, pertanyaan diperjelas jika ada riwayat chat sebelumnya.
+3. **Pencarian Paralel** — Sistem mencari di **dua tempat sekaligus**: (a) di dokumen internal via Qdrant, dan (b) di web via DuckDuckGo. Hasil dari keduanya digabung dengan label berbeda.
+4. **Analisis AI** — AI (Groq) membaca context dari internal + web, lalu merangkum jawaban. Setiap klaim harus menyebut sumbernya (`[C1]` untuk internal, `[W1]` untuk web).
+5. **Validasi** — Sistem periksa apakah sumber yang disebut AI benar-benar ada. Jika tidak, AI diminta generate ulang.
+6. **Hasil** — Jawaban muncul di chat dengan badge **📁 Knowledge Base** untuk sumber internal dan **🌐 Web** untuk sumber online. User bisa klik link web langsung.
+
+### RAG Query Sequence (Hybrid)
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant FE as Frontend
+    participant BE as Backend
+    participant EMB as Embedding
+    participant QD as Qdrant
+    participant WWW as DuckDuckGo
+    participant GR as Groq LLM
+    participant DB as PostgreSQL
+
+    User->>FE: "siapa presiden 2024?"
+    FE->>BE: POST /api/v1/chat/query
+    activate BE
+
+    BE->>BE: _sanitize + scan_and_redact(PII)
+    BE->>DB: get_or_create_session()
+    DB-->>BE: session_id
+
+    alt casual greeting
+        BE->>GR: generate_response (no context)
+        GR-->>BE: casual reply
+        BE-->>FE: casual response
+    else substantive
+        BE->>GR: rewrite_query (if history exists)
+        GR-->>BE: enriched_query
+        BE->>BE: expand_synonyms()
+        BE->>EMB: generate_embedding()
+        EMB-->>BE: 1024-dim vector
+
+        par Internal search
+            BE->>QD: multi_source_search(top-20)
+            QD-->>BE: scored internal chunks
+        and Web search
+            BE->>BE: check Redis cache
+            alt cache miss
+                BE->>WWW: ddgs.text(query)
+                WWW-->>BE: 5 web results
+                BE->>BE: cache in Redis (1h TTL)
+            end
+        end
+
+        BE->>BE: merge context: [C1..C3] + [W1..W3]
+        BE->>GR: generate_response(hybrid context)
+        GR-->>BE: answer with [C1][W1] citations
+
+        BE->>BE: validate_citations()
+        BE->>DB: save message + citations
+        BE-->>FE: QueryResponse + mixed sources
+    end
+
+    deactivate BE
+    FE-->>User: Display answer + 📁 Knowledge Base + 🌐 Web
+```
+
+### Request Processing Flow
+
+```mermaid
+flowchart TD
+    REQ["POST /api/v1/chat/query"] --> SANITIZE["Sanitize + PII redact"]
+    SANITIZE --> CASUAL{"_is_casual()?"}
+    CASUAL -->|"greeting"| GREETING["generate_response()<br/>No context, langsung jawab"]
+    CASUAL -->|"substantive"| RAG
+
+    subgraph RAG["Hybrid RAG Pipeline"]
+        direction TB
+        REWRITE["rewrite_query()<br/>(jika ada history)"]
+        EXPAND["expand_synonyms()"]
+        EMBED["generate_embedding()<br/>bge-m3 → 1024-dim"]
+        SRCH["Parallel search:<br/>Qdrant + DuckDuckGo"]
+        MRG["Merge results:<br/>[C1..C3] internal<br/>[W1..W3] web"]
+
+        REWRITE --> EXPAND --> EMBED --> SRCH --> MRG
+    end
+
+    RAG --> GEN["generate_response()<br/>Groq (llama-3.1-8b-instant)<br/>dengan hybrid context"]
+    GEN --> VALID["validate_citations()"]
+    VALID -->|"invalid"| REGEN["Regenerate 1x<br/>dengan strict prompt"]
+    REGEN --> VALID
+    VALID -->|"valid"| SAVE["Save to DB:<br/>chat_message + citations"]
+    SAVE --> RESP["QueryResponse<br/>+ sources (internal + web)"]
+
+    GREETING --> RESP
+```
+
+### Document Ingestion Sequence
+
+```mermaid
+sequenceDiagram
+    participant Admin as Admin User
+    participant FE as Frontend
+    participant BE as Backend
+    participant DB as PostgreSQL
+    participant DISK as /data volume
+    participant WK as Worker
+    participant QD as Qdrant
+    participant OLL as Ollama
+
+    Admin->>FE: Upload file (PDF/DOCX/CSV/XLSX)
+    FE->>BE: POST /api/v1/documents/upload
+    activate BE
+
+    BE->>BE: validate file (extension, size, magic bytes)
+    BE->>DISK: save file as {uuid}.ext
+    BE->>DB: INSERT Document(status='QUEUED')
+    BE->>DB: INSERT IngestionJob(status='QUEUED')
+    BE-->>FE: 202 Accepted {document_id, job_id}
+    deactivate BE
+
+    loop Poll every 5s
+        WK->>DB: SELECT ... FOR UPDATE SKIP LOCKED
+        alt has queued job
+            WK->>DB: UPDATE job → 'PROCESSING'
+            WK->>DISK: read file
+            WK->>WK: parse_document()
+            WK->>WK: chunk_document()
+            WK->>OLL: generate_embeddings() (bge-m3)
+            OLL-->>WK: 1024-dim vectors
+            WK->>QD: batch_upsert(PointStruct)
+            WK->>DB: UPDATE job → 'COMPLETED'
+            WK->>DB: UPDATE document → 'COMPLETED'
+        end
+    end
+```
 
 ### Database Schema (PostgreSQL)
 
@@ -246,18 +375,15 @@ erDiagram
         timestamp created_at
         timestamp updated_at
     }
-
     ROLES {
         uuid id PK
         varchar name UK
         text description
     }
-
     USER_ROLES {
         uuid user_id PK
         uuid role_id PK
     }
-
     DOCUMENTS {
         uuid id PK
         text original_filename
@@ -276,7 +402,6 @@ erDiagram
         timestamp created_at
         timestamp updated_at
     }
-
     DOCUMENT_CHUNKS {
         uuid id PK
         uuid document_id FK
@@ -289,7 +414,6 @@ erDiagram
         uuid qdrant_point_id
         timestamp created_at
     }
-
     INGESTION_JOBS {
         uuid id PK
         uuid document_id FK
@@ -302,7 +426,6 @@ erDiagram
         timestamp finished_at
         timestamp created_at
     }
-
     CHAT_SESSIONS {
         uuid id PK
         uuid user_id FK
@@ -310,7 +433,6 @@ erDiagram
         timestamp created_at
         timestamp updated_at
     }
-
     CHAT_MESSAGES {
         uuid id PK
         uuid session_id FK
@@ -324,7 +446,6 @@ erDiagram
         jsonb token_usage
         timestamp created_at
     }
-
     MESSAGE_CITATIONS {
         uuid id PK
         uuid message_id FK
@@ -334,7 +455,6 @@ erDiagram
         int quote_end
         timestamp created_at
     }
-
     FEEDBACK {
         uuid id PK
         uuid message_id FK
@@ -343,7 +463,6 @@ erDiagram
         text comment
         timestamp created_at
     }
-
     AUDIT_LOGS {
         uuid id PK
         uuid actor_user_id FK
@@ -355,7 +474,6 @@ erDiagram
         jsonb metadata
         timestamp created_at
     }
-
     RAG_EVALUATION_CASES {
         uuid id PK
         text question
@@ -365,7 +483,6 @@ erDiagram
         varchar category
         timestamp created_at
     }
-
     RAG_EVALUATION_RUNS {
         uuid id PK
         uuid case_id FK
@@ -376,170 +493,7 @@ erDiagram
     }
 ```
 
-### RAG Query Sequence
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant FE as Frontend
-    participant BE as Backend (Router)
-    participant LLM as LLM Service
-    participant EMB as Embedding Service
-    participant QD as Qdrant
-    participant DB as PostgreSQL
-    participant OLL as Ollama
-
-    User->>FE: "apa itu bitcoin?"
-    FE->>BE: POST /api/v1/chat/query
-    activate BE
-
-    BE->>DB: get_or_create_session()
-    DB-->>BE: session_id
-
-    BE->>BE: _sanitize(query)
-    BE->>BE: _is_casual? → false
-
-    BE->>DB: get_history()
-    DB-->>BE: history (string)
-
-    alt has history
-        BE->>LLM: rewrite_query(query, history)
-        LLM->>OLL: /api/chat (qwen2.5:7b)
-        OLL-->>LLM: rewritten query
-        LLM-->>BE: enriched_query
-    else no history
-        BE->>BE: skip rewrite
-    end
-
-    BE->>BE: expand_synonyms()
-
-    BE->>EMB: generate_embedding(enriched_query)
-    activate EMB
-    EMB->>OLL: /api/embeddings (bge-m3)
-    OLL-->>EMB: 1024-dim vector
-    EMB-->>BE: query_vector
-    deactivate EMB
-
-    BE->>QD: search(top-20, score>=0.3)
-    activate QD
-    QD-->>BE: scored results
-    deactivate QD
-
-    BE->>BE: filter(similarity_threshold)
-    BE->>QDR: rerank_chunks (skip if <=5)
-    BE->>ANS: answerability gate
-
-    alt can_answer = false
-        BE-->>FE: abstain response
-    else can_answer = true
-        BE->>BE: format_context_with_ids(C1, C2...)
-        BE->>OLL: generate_response(qwen2.5:7b)
-        activate OLL
-        OLL-->>BE: LLM reply with [C1][C2] citations
-        deactivate OLL
-
-        BE->>BE: validate_citations()
-        alt citation invalid
-            BE->>OLL: generate (retry with strict prompt)
-        end
-
-        BE->>BE: replace [C1] → [Sumber: file.pdf]
-        BE->>DB: save chat_message + message_citations
-
-        BE-->>FE: QueryResponse
-    end
-
-    deactivate BE
-    FE-->>User: Display answer + sources
-```
-
-### Document Ingestion Sequence
-
-```mermaid
-sequenceDiagram
-    participant Admin as Admin User
-    participant FE as Frontend
-    participant BE as Backend
-    participant DB as PostgreSQL
-    participant DISK as /data volume
-    participant WK as Worker
-    participant QD as Qdrant
-    participant OLL as Ollama
-
-    Admin->>FE: Upload file (PDF/DOCX/CSV/XLSX)
-    FE->>BE: POST /api/v1/documents/upload
-    activate BE
-
-    BE->>BE: validate file (extension, size, MIME)
-    BE->>DISK: save file as {uuid}.ext
-    BE->>DB: INSERT Document(status='queued')
-    BE->>DB: INSERT IngestionJob(status='queued')
-    BE-->>FE: 202 Accepted {document_id, job_id}
-    deactivate BE
-
-    loop Poll every 5s
-        WK->>DB: SELECT ... FOR UPDATE SKIP LOCKED
-        alt has queued job
-            WK->>DB: UPDATE job → 'processing'
-            WK->>DISK: read file
-            WK->>WK: parse_document()
-            WK->>WK: chunk_document()
-            WK->>OLL: generate_embeddings() (bge-m3)
-            activate OLL
-            OLL-->>WK: 1024-dim vectors
-            deactivate OLL
-            WK->>QD: batch_upsert(PointStruct)
-            WK->>DB: UPDATE job → 'completed'
-            WK->>DB: UPDATE document → 'completed'
-        end
-    end
-```
-
-### Request Processing Flow
-
-```mermaid
-flowchart TD
-    REQ["POST /api/v1/chat/query"] --> SANITIZE["_sanitize()<br/>Strip zero-width chars<br/>Remove URLs<br/>Fullwidth→Halfwidth<br/>Truncate to 2000 chars"]
-    SANITIZE --> PII["scan_and_redact()<br/>Redact NIK, email, phone<br/>... (inconsistent between Ollama/Groq)"]
-    PII --> CASUAL{"_is_casual()"}
-    CASUAL -->|"≤3 chars or<br/>casual regex"| GREETING["generate_response()<br/>System prompt only<br/>No context"]
-    CASUAL -->|"substantive"| RAG["RAG Pipeline"]
-
-    subgraph RAG["RAG Pipeline"]
-        direction TB
-        HIST{"history?"}
-        HIST -->|no| SKIP[Skip rewrite_query]
-        HIST -->|yes| RW["rewrite_query()<br/>~2-3s LLM call"]
-        RW --> EXP["expand_synonyms()<br/>synonyms.json"]
-        SKIP --> EXP
-        EXP --> EMBED["generate_embedding()<br/>bge-m3 → 1024-dim"]
-        EMBED --> SEARCH["Qdrant dense search<br/>top-20, score≥0.3"]
-        SEARCH --> PROG{"0 results?"}
-        PROG -->|yes| RELAX["Progressive fallback<br/>score_threshold=0.0"]
-        PROG -->|found| FILTER["Filter by SIMILARITY_THRESHOLD<br/>(current: 0.55)"]
-        RELAX --> RELAXED{"still 0?"}
-        RELAXED -->|yes| FALLBACK["Return fallback message"]
-        RELAXED -->|found| FILTER
-        FILTER --> RERANK{"chunks > 5?"}
-        RERANK -->|yes| RR["rerank_chunks()<br/>LLM binary relevance"]
-        RERANK -->|"no (≤5)"| SKIP_RR["Skip reranker"]
-        RR --> GATE["Answerability Gate<br/>can_answer? confidence?"]
-        SKIP_RR --> GATE
-        GATE -->|can_answer=false| ABSTAIN["Return abstain message"]
-        GATE -->|can_answer=true| CTX["format_context_with_ids()<br/>C1, C2, C3..."]
-        CTX --> GEN["generate_response()<br/>qwen2.5:7b LLM call"]
-        GEN --> CITATION{"is_citation_valid()?"}
-        CITATION -->|invalid| REGEN["Regenerate with strict prompt"]
-        REGEN --> CITATION
-        CITATION -->|valid| DISPLAY["Replace [C1] → [Sumber: file.pdf]"]
-        DISPLAY --> SAVE["Save to DB:<br/>chat_messages<br/>message_citations"]
-        SAVE --> RESP["Return QueryResponse<br/>+ reply + sources + confidence"]
-    end
-
-    GREETING --> RESP
-    FALLBACK --> RESP
-    ABSTAIN --> RESP
-```
+---
 
 ## API Endpoints
 
@@ -547,9 +501,8 @@ flowchart TD
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/v1/chat/query` | RAG query (non-streaming, stable) |
+| `POST` | `/api/v1/chat/query` | **Hybrid RAG query** (internal + web search, non-streaming) |
 | `POST` | `/api/v1/chat/stream` | SSE streaming (may break on short responses) |
-| `POST` | `/api/v1/chat/fallback` | Google search (direct link if API down) |
 | `POST` | `/api/v1/chat/feedback` | Thumbs up/down (`positive`/`negative`) |
 
 ### Documents
@@ -565,6 +518,8 @@ flowchart TD
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | DB + Qdrant connectivity |
+| `GET` | `/healthz/live` | Liveness probe |
+| `GET` | `/healthz/ready` | Readiness probe (DB + Qdrant) |
 
 ### Contoh Query
 
@@ -580,41 +535,63 @@ Response:
   "session_id": "uuid",
   "reply": "Bitcoin adalah sistem uang elektronik peer-to-peer...",
   "message_id": "uuid",
-  "sources": [{"file_name": "bitcoin.pdf"}],
-  "confidence": "medium",
+  "sources": [
+    {"file_name": "bitcoin.pdf", "source_type": "internal"},
+    {"title": "Bitcoin - Wikipedia", "url": "https://en.wikipedia.org/wiki/Bitcoin", "source_type": "external"}
+  ],
+  "confidence": "high",
   "fallback_triggered": false,
   "out_of_context": false
 }
 ```
 
+---
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| **LLM** | | |
 | `LLM_PROVIDER` | `ollama` | `ollama` \| `groq` |
-| `OLLAMA_LLM_MODEL` | `qwen2.5:7b` | LLM model untuk Ollama |
 | `GROQ_API_KEY` | — | Required jika `LLM_PROVIDER=groq` |
-| `GROQ_MODEL` | `llama-3.1-8b-instant` | LLM model untuk Groq |
-| `EMBEDDING_MODEL` | `bge-m3` | Embedding model via Ollama |
-| `EMBEDDING_DIM` | `1024` | Harus sesuai dimensi model |
-| `SIMILARITY_THRESHOLD` | `0.55` | Minimum similarity score |
-| `CHUNK_SIZE` | `200` | Chunk size (words) — default Docker `512` |
-| `CHUNK_OVERLAP` | `25` | Chunk overlap — default Docker `50` |
+| `GROQ_MODEL` | `llama-3.1-8b-instant` | Model Groq |
+| `OLLAMA_LLM_MODEL` | `qwen2.5:7b` | Fallback Ollama model |
+| **Embedding** | | |
+| `EMBEDDING_MODEL` | `bge-m3` | Model embedding via Ollama |
+| `EMBEDDING_DIM` | `1024` | Harus sesuai dimensi model & Qdrant |
+| **RAG Pipeline** | | |
+| `SIMILARITY_THRESHOLD` | `0.55` | Minimum similarity (aktual: 0.40) |
+| `CHUNK_SIZE` | `200` | Chunk size — Docker default `512` |
+| `CHUNK_OVERLAP` | `25` | Chunk overlap — Docker default `50` |
 | `HYBRID_TOP_K` | `20` | Max candidates dari Qdrant |
 | `TOP_K` | `5` | Max chunks ke LLM context |
-| `ENABLE_EXTERNAL_FALLBACK` | `false` | Google Custom Search |
+| **Web Search** | | |
+| `ENABLE_WEB_SEARCH` | `true` | Aktifkan hybrid search |
+| `SEARCH_PROVIDER` | `duckduckgo` | `duckduckgo` \| `tavily` |
+| `SEARCH_MAX_RESULTS` | `5` | Max hasil web per query |
+| `SEARCH_CACHE_TTL` | `3600` | Cache web results (detik) |
+| `TAVILY_API_KEY` | — | API key jika pakai Tavily |
+| **Security** | | |
+| `ENABLE_EXTERNAL_FALLBACK` | `false` | (deprecated) Google CSE |
 | `JWT_SECRET_KEY` | `change_me` | Untuk auth (belum aktif) |
+
+---
 
 ## Key Design Decisions
 
 | Decision | Alasan |
 |----------|--------|
-| **Non-streaming endpoint** | SSE streaming uvicorn corrupted pada async generator pendek |
-| **`native_enum=False`** | SAEnum PostgreSQL menyimpan `.name` (uppercase), tapi Python enum punya `.value` (lowercase) — solusi: VARCHAR + string literal |
-| **Threshold 0.40** | `nomic-embed-text` English-optimized — score BI query rata-rata 0.50-0.58. Dengan `bge-m3` multilingual, threshold bisa naik ke 0.50+ |
-| **Chunk-ID citation** | Bukan semantic similarity post-hoc. LLM diminta pakai `[C1]`, `[C2]` — divalidasi regex |
-| **Ollama auto-fallback Groq** | 2 retry ke Ollama → otomatis switch ke Groq. Zero down time |
-| **UUID columns** | SQLAlchemy `UUID(as_uuid=True)` return Python UUID. Schema Pydantic butuh `field_validator("id", mode="before")` untuk convert ke string |
+| **Hybrid RAG (internal + web)** | Setiap query cari di Qdrant + DuckDuckGo paralel. Hasil digabung dengan label `[C1]` (internal) dan `[W1]` (web). LLM synthesizes natural answer. |
+| **Groq sebagai primary LLM** | Groq cloud GPU ~200 tok/s vs Ollama lokal ~10 tok/s. Latency turun dari 40-50s ke ~3s per query. Embedding tetap via Ollama (ringan, 0.1s). |
+| **DuckDuckGo gratis (no API key)** | Provider web search gratis, unlimited. Ada DNS spoofing di ISP Indonesia — fix via `extra_hosts` di docker-compose + Python DNS patch. |
+| **Redis cache web search** | Query yang sama dalam 1 jam tidak perlu search ulang ke DuckDuckGo. Cache key = SHA256(query). |
+| **Chunk-ID citation dual** | Bukan semantic similarity post-hoc. LLM diminta pakai `[C1]` untuk internal, `[W1]` untuk web — divalidasi regex. |
+| **Non-streaming endpoint** | SSE streaming uvicorn corrupted pada async generator pendek. |
+| **`native_enum=False`** | SAEnum PostgreSQL menyimpan `.name` (uppercase). Solusi: VARCHAR + string literal. |
+| **PII redaction sebelum web search** | Query di-redact (NIK, email, phone) sebelum dikirim ke DuckDuckGo. |
+| **Audit log untuk web search** | Setiap web search call tercatat di tabel `audit_logs` (query, provider, latency, results_count). |
+
+---
 
 ## Developer Commands
 
@@ -629,5 +606,8 @@ make test-cov      # with coverage report
 # Docker
 docker compose logs backend -f   # Backend logs
 docker compose logs worker -f    # Worker logs
+
+# Debug
 docker compose exec backend python -c "from app.config import SIMILARITY_THRESHOLD; print(SIMILARITY_THRESHOLD)"
+docker compose exec backend python -c "from app.services.search_client import search_web; r=search_web('test'); print(len(r), 'results')"
 ```
