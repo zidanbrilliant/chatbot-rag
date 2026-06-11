@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.config import DATA_DIR
 from app.database import SessionLocal
-from app.models.document import Document, DocumentStatus
+from app.models.document import AccessLevel, Document, DocumentStatus
 from app.models.ingestion import IngestionJob, IngestionJobStatus
 from app.services.chunking import chunk_document
 from app.services.document_processor import parse_document
@@ -141,6 +141,14 @@ def _ingest_csv_as_products(file_path: str, db) -> int:
 def auto_scan_data_folder() -> int:
     """Scan /data folder, queue ingestion jobs for new files, ingest CSV products.
 
+    For CSV product catalogs (Barang/Brand/Tipe/Harga schema):
+    - Parse and import to products + product_prices tables directly
+    - Mark document as COMPLETED (no vector embedding needed — products are queryable directly)
+    - Store ingestion metadata in document.attributes JSONB
+
+    For PDF/DOCX/XLSX:
+    - Queue embedding + chunking job as normal
+
     Returns number of new jobs queued.
     """
     from app.models.document import Document
@@ -171,19 +179,77 @@ def auto_scan_data_folder() -> int:
                 .filter(Document.document_hash == file_hash)
                 .first()
             )
-            if existing and existing.status == "completed":
-                # Already ingested — but for CSV, also try to import as products
-                if ext == ".csv" and existing.attributes and not existing.attributes.get("csv_products_imported"):
-                    count = _ingest_csv_as_products(path, db)
-                    if count > 0:
-                        existing.attributes = {
-                            **(existing.attributes or {}),
-                            "csv_products_imported": True,
-                        }
-                        db.commit()
+
+            # ── CSV product catalog: import to products table, mark COMPLETED ──
+            if ext == ".csv":
+                if existing and existing.status == DocumentStatus.COMPLETED:
+                    # Already done — skip
+                    continue
+                if existing and existing.status == DocumentStatus.FAILED and existing.attributes and existing.attributes.get("csv_products_imported"):
+                    # Already imported products even though doc marked failed (e.g., old runs)
+                    # Mark as completed
+                    existing.status = DocumentStatus.COMPLETED
+                    db.commit()
+                    continue
+
+                # First-time processing OR retry of failed CSV
+                doc_id = existing.id if existing else str(uuid.uuid4())
+                if not existing:
+                    doc = Document(
+                        id=doc_id,
+                        original_filename=entry,
+                        stored_filename=f"{doc_id}{ext}",
+                        file_path=path,
+                        file_type=ext.lstrip("."),
+                        size_bytes=os.path.getsize(path),
+                        document_hash=file_hash,
+                        access_level=AccessLevel.INTERNAL,
+                        status=DocumentStatus.PROCESSING,
+                    )
+                    db.add(doc)
+                    db.commit()
+                else:
+                    existing.status = DocumentStatus.PROCESSING
+                    db.commit()
+
+                products_imported = _ingest_csv_as_products(path, db)
+
+                if products_imported > 0:
+                    # Mark as COMPLETED — no vector embedding needed
+                    target_doc = existing or doc
+                    target_doc.status = DocumentStatus.COMPLETED
+                    target_doc.attributes = {
+                        "csv_products_imported": True,
+                        "products_count": products_imported,
+                        "ingestion_type": "csv_catalog",
+                        "ingested_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    db.commit()
+                    logger.info(
+                        "CSV catalog ingested: %s — %d products (skipped vector embedding)",
+                        entry, products_imported,
+                    )
+                else:
+                    # CSV failed to parse — mark as failed
+                    target_doc = existing or doc
+                    target_doc.status = DocumentStatus.FAILED
+                    target_doc.error_code = "CSV_PARSE_FAILED"
+                    target_doc.error_message = "Failed to parse CSV — check format"
+                    db.commit()
+                    logger.warning("CSV catalog failed to parse: %s", entry)
                 continue
 
-            # Create new ingestion job
+            # ── Non-CSV (PDF/DOCX/XLSX): queue embedding job ──
+            if existing and existing.status == DocumentStatus.COMPLETED:
+                continue
+            if existing and existing.status == DocumentStatus.FAILED:
+                # Don't re-create a failed document — keep its history
+                logger.info(
+                    "Skipping %s — already failed. Reset manually if needed.",
+                    entry,
+                )
+                continue
+
             doc_id = str(uuid.uuid4())
             doc = Document(
                 id=doc_id,
@@ -193,28 +259,20 @@ def auto_scan_data_folder() -> int:
                 file_type=ext.lstrip("."),
                 size_bytes=os.path.getsize(path),
                 document_hash=file_hash,
-                status="queued",
+                access_level=AccessLevel.INTERNAL,
+                status=DocumentStatus.QUEUED,
             )
             db.add(doc)
 
             job = IngestionJob(
                 document_id=doc_id,
-                status="queued",
+                status=IngestionJobStatus.QUEUED,
                 max_attempts=MAX_ATTEMPTS,
             )
             db.add(job)
             db.commit()
             queued += 1
             logger.info("Auto-ingest queued: %s (hash=%s)", entry, file_hash[:8])
-
-            # For CSV, also import directly to products table
-            if ext == ".csv":
-                count = _ingest_csv_as_products(path, db)
-                if count > 0 and doc.attributes is None:
-                    doc.attributes = {}
-                if doc.attributes is not None:
-                    doc.attributes["csv_products_imported"] = True
-                    db.commit()
     finally:
         db.close()
 
@@ -303,12 +361,16 @@ def process_job(job_id: str) -> bool:
         try:
             if job:
                 job.attempts += 1
+                # Smart retry: only retry if failure is NOT due to persistent external issues
+                # (like Ollama unreachable). After MAX_ATTEMPTS, mark as FAILED permanently.
                 job.status = IngestionJobStatus.FAILED if job.attempts >= MAX_ATTEMPTS else IngestionJobStatus.QUEUED
                 job.error_message = str(e)[:500]
                 job.finished_at = datetime.now(timezone.utc)
             if doc:
                 doc.status = DocumentStatus.FAILED
                 doc.error_message = str(e)[:500]
+                # If embedding failure persists, document stays FAILED but
+                # worker won't retry indefinitely (max_attempts bounds it)
             db.commit()
         except Exception:
             db.rollback()

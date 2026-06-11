@@ -12,7 +12,7 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.database import Base
 
@@ -45,12 +45,12 @@ class Document(Base):
     size_bytes = Column(BigInteger, nullable=False)
     document_hash = Column(String(64), nullable=True, index=True)
     access_level = Column(
-        SAEnum(AccessLevel, native_enum=False, length=20),
+        SAEnum(AccessLevel, native_enum=False, length=20, values_callable=lambda obj: [e.value for e in obj]),
         default="internal",
         nullable=False,
     )
     status = Column(
-        SAEnum(DocumentStatus, native_enum=False, length=20),
+        SAEnum(DocumentStatus, native_enum=False, length=20, values_callable=lambda obj: [e.value for e in obj]),
         default="uploaded",
         nullable=False,
     )
@@ -58,6 +58,7 @@ class Document(Base):
     uploaded_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     error_code = Column(String(50), nullable=True)
     error_message = Column(Text, nullable=True)
+    attributes = Column(JSONB, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
