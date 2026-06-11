@@ -73,18 +73,19 @@ def test_price_query_beras():
     print(f"  reply (120c): {data.get('reply', '')[:120]!r}")
     print(f"  confidence:  {data.get('confidence')}")
     print(f"  sources:     {len(data.get('sources', []))} source(s)")
-    print(f"  metadata:    {list(data.get('metadata', {}).keys())}")
+    meta = data.get("metadata", {})
+    print(f"  metadata:    {list(meta.keys())}")
     print()
-    print("  metadata.price_table:")
-    for row in data.get("metadata", {}).get("price_table", []):
-        print(f"    - {row['source'][:30]:<30} | {row['product'][:20]:<20} | {row['price']:<12} | {row['type']}")
+    print("  metadata.nl_sources:")
+    for s in meta.get("nl_sources", []):
+        print(f"    [{s.get('id')}] {s.get('type','?'):<8} | {s.get('label','')[:40]:<40} | {s.get('price','')}")
     print()
     print("  metadata.intent:")
-    intent = data.get("metadata", {}).get("intent", {})
+    intent = meta.get("intent", {})
     for k, v in intent.items():
         print(f"    {k}: {v}")
-    assert "price_table" in data.get("metadata", {}), "Should have price_table in metadata"
-    assert len(data["metadata"]["price_table"]) >= 1
+    assert "nl_sources" in meta, "Should have nl_sources in metadata"
+    assert len(meta["nl_sources"]) >= 1
     assert "Beras" in data["reply"]
     print("  PASS")
 
@@ -93,9 +94,24 @@ def test_price_query_bitcoin_date():
     banner("HTTP TEST 2: POST /chat/query — 'harga Bitcoin pada 2024-01-15'")
     client = make_client()
     with patch("app.routers.chat.generate_response") as mock_gen, \
-         patch("app.routers.chat._search_web_with_cache") as mock_web:
+         patch("app.routers.chat._search_web_with_cache") as mock_web, \
+         patch("app.services.price_service.PriceService.lookup_by_date") as mock_by_date, \
+         patch("app.services.price_service.PriceService.search_from_files") as mock_files:
         mock_gen.return_value = "Harga Bitcoin pada tanggal tersebut tersedia di database."
         mock_web.return_value = []
+        mock_files.return_value = []
+        from datetime import date
+        from decimal import Decimal
+        from app.services.price_service import PriceResult
+        mock_by_date.return_value = [PriceResult(
+            source="postgres",
+            product_name="Bitcoin",
+            price=Decimal("445000000"),
+            currency="IDR",
+            source_detail="Bitcoin (BTC) snapshot 2024-01-01",
+            price_date=date(2024, 1, 1),
+            field_type="close",
+        )]
 
         resp = client.post(
             "/api/v1/chat/query",
@@ -106,12 +122,13 @@ def test_price_query_bitcoin_date():
     assert resp.status_code == 200, f"Got {resp.status_code}: {resp.text}"
     data = resp.json()
     print(f"  reply (120c): {data.get('reply', '')[:120]!r}")
-    intent = data.get("metadata", {}).get("intent", {})
+    meta = data.get("metadata", {})
+    intent = meta.get("intent", {})
     print(f"  intent.type: {intent.get('type')}")
     print(f"  intent.date: {intent.get('date')}")
-    print(f"  price_table: {len(data.get('metadata', {}).get('price_table', []))} rows")
-    for row in data.get("metadata", {}).get("price_table", []):
-        print(f"    - {row['product'][:20]:<20} | {row['price']:<15} | {row['date']}")
+    print(f"  nl_sources:  {len(meta.get('nl_sources', []))} entries")
+    for s in meta.get("nl_sources", []):
+        print(f"    [{s.get('id')}] {s.get('type','?'):<8} | {s.get('label','')[:40]:<40} | {s.get('price','')}")
     assert intent.get("type") == "timeseries"
     assert intent.get("date") == "2024-01-15"
     print("  PASS")
@@ -121,7 +138,8 @@ def test_price_query_samsung():
     banner("HTTP TEST 3: POST /chat/query — 'harga Samsung Galaxy S24'")
     client = make_client()
     with patch("app.routers.chat.generate_response") as mock_gen, \
-         patch("app.routers.chat._search_web_with_cache") as mock_web:
+         patch("app.routers.chat._search_web_with_cache") as mock_web, \
+         patch("app.services.price_service.PriceService.lookup_by_name") as mock_lookup:
         mock_gen.return_value = "Samsung Galaxy S24 tersedia."
         mock_web.return_value = [
             {
@@ -130,6 +148,16 @@ def test_price_query_samsung():
                 "snippet": "Samsung Galaxy S24 $899",
             }
         ]
+        from decimal import Decimal
+        from app.services.price_service import PriceResult
+        mock_lookup.return_value = [PriceResult(
+            source="postgres",
+            product_name="Samsung Galaxy S24",
+            price=Decimal("15999000"),
+            currency="IDR",
+            source_detail="SAMSUNG-S24",
+            field_type="latest",
+        )]
 
         resp = client.post(
             "/api/v1/chat/query",
@@ -139,13 +167,12 @@ def test_price_query_samsung():
     print(f"  status_code: {resp.status_code}")
     assert resp.status_code == 200, f"Got {resp.status_code}: {resp.text}"
     data = resp.json()
-    intent = data.get("metadata", {}).get("intent", {})
+    meta = data.get("metadata", {})
+    intent = meta.get("intent", {})
     print(f"  intent.type:     {intent.get('type')}")
     print(f"  intent.target:   {intent.get('target')}")
     print(f"  intent.currency: {intent.get('currency')}")
-    print(f"  price_table:     {len(data.get('metadata', {}).get('price_table', []))} rows")
-    for row in data.get("metadata", {}).get("price_table", []):
-        print(f"    - {row['product'][:30]:<30} | {row['price']:<18} | {row['type']}")
+    print(f"  nl_sources:      {len(meta.get('nl_sources', []))} entries")
     assert "Samsung" in intent.get("target", "")
     print("  PASS")
 

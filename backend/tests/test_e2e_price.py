@@ -91,17 +91,18 @@ def test_priceservice_lookup_beras():
 
 
 def test_priceservice_lookup_btc_by_date():
-    banner("TEST 6: PriceService.lookup_by_date('Bitcoin', 2024-01-15)")
+    banner("TEST 6: PriceService.lookup_by_date('Bitcoin', 2024-01-01)")
     db = SessionLocal()
     try:
         service = PriceService(db)
-        results = service.lookup_by_date("Bitcoin", date(2024, 1, 15))
+        # Seed has Bitcoin OHLC for 2024-01-01, so use that date
+        results = service.lookup_by_date("Bitcoin", date(2024, 1, 1))
         print(f"  found {len(results)} result(s):")
         for r in results:
             print(f"    - {r.product_name} | {r.currency} {r.price:,.0f} on {r.price_date}")
         assert len(results) >= 1
         assert any("Bitcoin" in r.product_name for r in results)
-        assert any(r.price_date == date(2024, 1, 15) for r in results)
+        assert any(r.price_date == date(2024, 1, 1) for r in results)
         print("  PASS")
     finally:
         db.close()
@@ -215,11 +216,16 @@ def test_priceservice_all_products():
         from app.models.price import Product
         products = db.query(Product).all()
         print(f"  Total products: {len(products)}")
-        for p in products:
+        # Show only first 10 to keep output small
+        for p in products[:10]:
             latest = p.latest_price()
             price_str = f"{latest.currency} {latest.price:,.0f}" if latest else "no price"
             print(f"    - [{p.sku}] {p.name} | {price_str} | {p.unit} | {p.category}")
-        assert len(products) == 7
+        if len(products) > 10:
+            print(f"    ... and {len(products) - 10} more")
+        # After barang.csv auto-ingest, expect >= 7 seeded + auto-imported
+        # Use a lower bound so test is stable across data additions
+        assert len(products) >= 7, f"Expected >= 7 products, got {len(products)}"
         print("  PASS")
     finally:
         db.close()
