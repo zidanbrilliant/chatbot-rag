@@ -57,6 +57,172 @@ def _batch_upsert(points: list, batch_size: int = 50):
     logger.info("Upserted %d points to Qdrant", len(points))
 
 
+# ── Auto-scan /data folder ───────────────────────────────
+
+
+def _calculate_file_hash(file_path: str) -> str:
+    """SHA256 hash of file contents."""
+    import hashlib
+    with open(file_path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def _ingest_csv_as_products(file_path: str, db) -> int:
+    """Parse product CSV and insert into products + product_prices tables.
+
+    Returns number of products inserted/updated.
+    """
+    try:
+        from app.services.csv_product_mapper import parse_product_csv
+        from app.models.price import Product, ProductPrice
+    except ImportError:
+        logger.warning("csv_product_mapper not available")
+        return 0
+
+    try:
+        products = parse_product_csv(file_path)
+    except Exception as e:
+        logger.error("Failed to parse product CSV %s: %s", file_path, e)
+        return 0
+
+    inserted = 0
+    for p in products:
+        existing = db.query(Product).filter(Product.sku == p.sku).first()
+        if existing:
+            existing.name = p.name
+            existing.brand = p.brand or existing.brand
+            existing.category = p.category
+            existing.unit = "unit"
+            existing.attributes = {"tipe": p.tipe, "source_file": Path(file_path).name}
+            existing.source = "csv"
+        else:
+            product = Product(
+                sku=p.sku,
+                name=p.name,
+                category=p.category,
+                unit="unit",
+                attributes={"tipe": p.tipe, "source_file": Path(file_path).name},
+                source="csv",
+            )
+            db.add(product)
+            db.flush()
+
+        # Insert/update product price (latest)
+        if existing:
+            latest = (
+                db.query(ProductPrice)
+                .filter(ProductPrice.product_id == existing.id)
+                .order_by(ProductPrice.price_date.desc())
+                .first()
+            )
+            product_id = existing.id
+        else:
+            latest = None
+            product_id = product.id
+
+        if p.price and (not latest or latest.price != p.price):
+            db.add(ProductPrice(
+                product_id=product_id,
+                price=p.price,
+                currency="IDR",
+                price_date=datetime.now(timezone.utc).date(),
+                supplier=Path(file_path).stem,
+                source="csv",
+                notes=f"imported from {Path(file_path).name}",
+            ))
+
+        inserted += 1
+
+    db.commit()
+    logger.info("Imported %d products from %s", inserted, Path(file_path).name)
+    return inserted
+
+
+def auto_scan_data_folder() -> int:
+    """Scan /data folder, queue ingestion jobs for new files, ingest CSV products.
+
+    Returns number of new jobs queued.
+    """
+    from app.models.document import Document
+
+    if not os.path.isdir(DATA_DIR):
+        logger.warning("DATA_DIR does not exist: %s", DATA_DIR)
+        return 0
+
+    queued = 0
+    db = SessionLocal()
+    try:
+        for entry in os.listdir(DATA_DIR):
+            path = os.path.join(DATA_DIR, entry)
+            if not os.path.isfile(path):
+                continue
+            ext = Path(entry).suffix.lower()
+            if ext not in (".pdf", ".docx", ".csv", ".xlsx"):
+                continue
+
+            try:
+                file_hash = _calculate_file_hash(path)
+            except Exception as e:
+                logger.warning("Cannot hash %s: %s", entry, e)
+                continue
+
+            existing = (
+                db.query(Document)
+                .filter(Document.document_hash == file_hash)
+                .first()
+            )
+            if existing and existing.status == "completed":
+                # Already ingested — but for CSV, also try to import as products
+                if ext == ".csv" and existing.attributes and not existing.attributes.get("csv_products_imported"):
+                    count = _ingest_csv_as_products(path, db)
+                    if count > 0:
+                        existing.attributes = {
+                            **(existing.attributes or {}),
+                            "csv_products_imported": True,
+                        }
+                        db.commit()
+                continue
+
+            # Create new ingestion job
+            doc_id = str(uuid.uuid4())
+            doc = Document(
+                id=doc_id,
+                original_filename=entry,
+                stored_filename=f"{doc_id}{ext}",
+                file_path=path,
+                file_type=ext.lstrip("."),
+                size_bytes=os.path.getsize(path),
+                document_hash=file_hash,
+                status="queued",
+            )
+            db.add(doc)
+
+            job = IngestionJob(
+                document_id=doc_id,
+                status="queued",
+                max_attempts=MAX_ATTEMPTS,
+            )
+            db.add(job)
+            db.commit()
+            queued += 1
+            logger.info("Auto-ingest queued: %s (hash=%s)", entry, file_hash[:8])
+
+            # For CSV, also import directly to products table
+            if ext == ".csv":
+                count = _ingest_csv_as_products(path, db)
+                if count > 0 and doc.attributes is None:
+                    doc.attributes = {}
+                if doc.attributes is not None:
+                    doc.attributes["csv_products_imported"] = True
+                    db.commit()
+    finally:
+        db.close()
+
+    if queued:
+        logger.info("Auto-scan queued %d new file(s)", queued)
+    return queued
+
+
 def process_job(job_id: str) -> bool:
     """Process a single ingestion job by job_id. Returns True on success."""
     db = SessionLocal()
@@ -157,6 +323,14 @@ def process_job(job_id: str) -> bool:
 def run_worker():
     """Main worker loop — polls for pending jobs."""
     logger.info("Worker started — polling every %ds", POLL_INTERVAL)
+
+    # Auto-scan /data on startup
+    try:
+        queued = auto_scan_data_folder()
+        if queued:
+            logger.info("Initial auto-scan queued %d file(s) for ingestion", queued)
+    except Exception as e:
+        logger.error("Initial auto-scan failed: %s", str(e)[:200])
 
     while True:
         db = SessionLocal()

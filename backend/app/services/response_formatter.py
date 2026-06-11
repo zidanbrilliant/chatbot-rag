@@ -1,13 +1,11 @@
-"""Response formatter for price queries — grouped output.
+"""Response formatter for price queries — NL with inline citations.
 
-Builds hybrid output with separated internal/external sections:
-- Internal: prominent hero cards with database values
-- External: collapsible comparison list from web search
+Builds hybrid output with explicit source registry:
+- Each source has a stable ID [1], [2], [3]
+- LLM generates NL with inline citations
+- Frontend renders source list as clickable cards (no tables)
 
-Each row has:
-- field_label: "Tertinggi" / "Terendah" / etc.
-- price: full format "Rp 1.500.000" (no abbreviation)
-- date: Indonesian format "10 Jan 2025"
+NO MARKDOWN TABLES in response — pure natural language answer.
 """
 
 from __future__ import annotations
@@ -29,83 +27,90 @@ ID_MONTHS = [
     "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
 ]
 
-ID_MONTHS_FULL = [
-    "", "Januari", "Februari", "Maret", "April", "Mei", "Juni",
-    "Juli", "Agustus", "September", "Oktober", "November", "Desember",
-]
-
 
 @dataclass
-class PriceCard:
-    """One price row, formatted for display."""
+class SourceCitation:
+    """One source with metadata for inline citation rendering."""
 
-    title: str
-    product: str
-    price: str            # Full format: "Rp 1.500.000"
-    field_label: str      # "Tertinggi" / "Terendah" / etc.
-    date: str             # "10 Jan 2025" or ""
-    source_detail: str
+    source_id: int
+    label: str
+    source_type: str  # "internal" | "external"
     url: str | None = None
-    type: str = "internal"
-    confidence: float = 1.0
-    unit: str | None = None
+    snippet: str | None = None
+    price: str | None = None
     field_type: str = ""
-    raw_value: float = 0.0
-    raw_currency: str = ""
+    price_date: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.source_id,
+            "label": self.label,
+            "type": self.source_type,
+            "url": self.url,
+            "snippet": self.snippet,
+            "price": self.price,
+            "field_type": self.field_type,
+            "price_date": self.price_date,
+        }
 
 
 @dataclass
-class GroupedPriceTable:
-    """Output: internal cards as primary, external as comparison."""
+class NLResponse:
+    """Output: source registry + structured data (no markdown table)."""
 
-    internal_cards: list[PriceCard] = field(default_factory=list)
-    external_cards: list[PriceCard] = field(default_factory=list)
+    sources: list[SourceCitation] = field(default_factory=list)
+    internal_results: list[PriceResult] = field(default_factory=list)
+    web_results: list[dict] = field(default_factory=list)
     field_label: str = ""
     field_type: str = ""
     query_summary: str = ""
     intent: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict_list(self) -> list[dict[str, Any]]:
-        """Flat list for frontend rendering."""
-        out: list[dict[str, Any]] = []
-        for c in self.internal_cards:
-            out.append({
-                "type": "internal",
-                "title": c.title,
-                "product": c.product,
-                "price": c.price,
-                "field_label": c.field_label,
-                "field_type": c.field_type,
-                "date": c.date,
-                "source": c.source_detail,
-                "confidence": c.confidence,
-                "unit": c.unit or "-",
-                "url": None,
-            })
-        for c in self.external_cards:
-            out.append({
-                "type": "external",
-                "title": c.title,
-                "product": c.product,
-                "price": c.price,
-                "field_label": c.field_label,
-                "field_type": c.field_type,
-                "date": c.date,
-                "source": c.source_detail,
-                "confidence": c.confidence,
-                "unit": c.unit or "-",
-                "url": c.url,
-            })
-        return out
 
-
-def build_grouped_price_table(
+def build_nl_response(
     internal_results: list[PriceResult],
-    web_results: list[dict[str, Any]],
+    web_results: list[dict],
     intent: PriceIntent,
-) -> GroupedPriceTable:
-    """Build grouped output: internal as primary, external as comparison."""
-    table = GroupedPriceTable(
+) -> NLResponse:
+    """Build NL response with citation registry (no markdown table)."""
+    sources: list[SourceCitation] = []
+    next_id = 1
+
+    # 1. Internal sources (database products + file imports)
+    for r in internal_results:
+        sources.append(SourceCitation(
+            source_id=next_id,
+            label=_format_internal_label(r),
+            source_type="internal",
+            snippet=r.product_name,
+            price=f"{r.currency} {float(r.price):,.0f}" if r.price else None,
+            field_type=r.field_type or intent.field_type,
+            price_date=r.price_date.isoformat() if r.price_date else None,
+        ))
+        next_id += 1
+
+    # 2. Web sources (after strict filter)
+    for w in web_results:
+        best = w.get("best_price")
+        sources.append(SourceCitation(
+            source_id=next_id,
+            label=(w.get("title") or "Web source")[:80],
+            source_type="external",
+            url=w.get("url"),
+            snippet=(w.get("snippet") or "")[:200],
+            price=(
+                f"{best.currency} {best.value:,.0f}"
+                if best and hasattr(best, "value") else None
+            ),
+            field_type=getattr(best, "field_type", "") if best else "",
+            price_date=getattr(best, "date_context", "") if best else None,
+        ))
+        next_id += 1
+
+    return NLResponse(
+        sources=sources,
+        internal_results=internal_results,
+        web_results=web_results,
         field_label=intent.field_label(),
         field_type=intent.field_type,
         query_summary=_build_query_summary(intent),
@@ -122,105 +127,131 @@ def build_grouped_price_table(
         },
     )
 
-    # Build internal cards
-    for r in internal_results:
-        price_str = _format_price_full(r.price, r.currency)
-        date_str = _format_date_id(r.price_date) if r.price_date else ""
-        field_label = (
-            _field_label_for(r.field_type)
-            if r.field_type
-            else intent.field_label()
+
+def build_llm_context(nl: NLResponse, intent: PriceIntent) -> str:
+    """Build CONTEXT for LLM with explicit [N] source markers.
+
+    LLM is told to use [N] markers inline to cite sources.
+    """
+    parts: list[str] = []
+    parts.append("CONTEXT — Sumber data dengan nomor sitasi:")
+    parts.append("=" * 50)
+    parts.append("")
+
+    for src in nl.sources:
+        marker = f"[{src.source_id}]"
+        price_info = f" — {src.price}" if src.price else ""
+        date_info = f" ({src.price_date})" if src.price_date else ""
+        type_label = "DATABASE INTERNAL" if src.source_type == "internal" else "WEB"
+        parts.append(
+            f"{marker} {type_label}: {src.label}{price_info}{date_info}"
         )
-        table.internal_cards.append(
-            PriceCard(
-                title=r.source_detail or "Database",
-                product=r.product_name,
-                price=price_str,
-                field_label=field_label,
-                date=date_str,
-                source_detail=r.source_detail,
-                type="internal",
-                confidence=r.relevance_score,
-                unit=r.unit,
-                field_type=r.field_type or intent.field_type,
-                raw_value=float(r.price),
-                raw_currency=r.currency,
-            )
-        )
+        if src.snippet:
+            parts.append(f"    Snippet: {src.snippet[:150]}")
+        if src.url:
+            parts.append(f"    URL: {src.url}")
+        parts.append("")
 
-    # Build external cards (from filtered web results with context_prices)
-    for w in web_results:
-        ctx_prices = w.get("context_prices", [])
-        if not ctx_prices:
-            continue
-        # Take top-1 price per result
-        top = ctx_prices[0]
-        price_str = _format_price_full(Decimal(str(top.value)), top.currency)
-        date_str = (
-            _format_date_id_from_iso(top.date_context) if top.date_context else ""
-        )
-        field_label = _field_label_for(top.field_type) if top.field_type else ""
-        table.external_cards.append(
-            PriceCard(
-                title=w.get("title", "")[:60],
-                product=intent.target or "",
-                price=price_str,
-                field_label=field_label,
-                date=date_str,
-                source_detail=w.get("title", "")[:60],
-                url=w.get("url"),
-                type="external",
-                confidence=top.confidence,
-                field_type=top.field_type,
-                raw_value=top.value,
-                raw_currency=top.currency,
-            )
-        )
-
-    return table
+    parts.append("=" * 50)
+    parts.append("")
+    parts.append(f"Query: '{_build_query_summary(intent)}'")
+    parts.append("")
+    parts.append("ATURAN MENJAWAB:")
+    parts.append("- Gunakan sitasi [1], [2], dst saat menyebut angka dari CONTEXT.")
+    parts.append("- JANGAN mengarang angka. Gunakan hanya dari CONTEXT.")
+    parts.append("- Bandingkan database vs web secara eksplisit jika keduanya tersedia.")
+    parts.append("- Jawab dalam Bahasa Indonesia natural language (BUKAN markdown table).")
+    parts.append("- Setiap klaim harga HARUS ada sumbernya.")
+    parts.append("- Jika data tidak ditemukan di CONTEXT, jawab: 'Maaf, informasi tidak ditemukan.'")
+    return "\n".join(parts)
 
 
-# ── Formatting helpers ──────────────────────────────────
+# ── System prompt: strict anti-hallucination + NL format ──
+
+PRICE_NL_SYSTEM_PROMPT = """\
+Anda adalah asisten yang membantu menjawab pertanyaan tentang HARGA dalam Bahasa Indonesia.
+
+ATURAN KETAT:
+1. Anda HARUS menjawab dalam Bahasa Indonesia natural language (BUKAN markdown table, BUKAN bullet list dengan format teknis).
+2. Setiap angka yang Anda sebut WAJIB disertai sitasi [1], [2], [3] yang sesuai dengan CONTEXT.
+3. DILARANG KERAS mengarang angka. Gunakan HANYA angka yang ada di CONTEXT.
+4. Jika data yang diminta TIDAK ADA di CONTEXT, jawab dengan tegas: "Maaf, informasi tidak ditemukan dalam data internal maupun sumber online."
+5. Jika ada data database DAN data web, WAJIB bandingkan secara eksplisit (contoh: "Database menunjukkan Rp X, sementara Tokopedia menjual Rp Y").
+6. Akhiri jawaban dengan disclaimer singkat: "Harga dapat berubah sewaktu-waktu. Selalu verifikasi ke sumber resmi."
+7. JANGAN menyebut "CONTEXT", "CHUNK", atau terminologi teknis internal.
+8. JANGAN membuat asumsi atau menggunakan pengetahuan eksternal untuk angka.
+9. Format tanggal: "10 Jan 2025" (Indonesia).
+10. Format harga: "Rp 1.500.000" (lengkap, tanpa singkatan).
+"""
 
 
-def _format_price_full(value: Decimal | float, currency: str) -> str:
-    """Full price format with proper thousands separator (no abbreviation)."""
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return "-"
-    if v == int(v):
-        return f"{currency} {int(v):,}"
-    return f"{currency} {v:,.2f}"
+# ── Fallback NL builder (if LLM fails) ───────────────────
 
 
-def _format_date_id(d: "date") -> str:
-    """Format date as Indonesian short: '10 Jan 2025'."""
-    if d is None:
-        return ""
-    return f"{d.day} {ID_MONTHS[d.month]} {d.year}"
+def build_fallback_nl(nl: NLResponse, intent: PriceIntent) -> str:
+    """Build NL answer from sources if LLM call fails.
+
+    No LLM hallucination possible — uses source data directly.
+    """
+    if not nl.sources:
+        return "Maaf, informasi tidak ditemukan dalam data internal maupun sumber online."
+
+    parts: list[str] = []
+
+    # Build query summary as opening
+    summary = nl.query_summary or "Informasi harga"
+    parts.append(f"{summary}:")
+
+    # Group by source_type
+    internal = [s for s in nl.sources if s.source_type == "internal"]
+    external = [s for s in nl.sources if s.source_type == "external"]
+
+    if internal:
+        parts.append("")
+        parts.append("Berdasarkan data internal:")
+        for s in internal:
+            field = f" ({_field_label_id(s.field_type)})" if s.field_type else ""
+            date = f" per {s.price_date}" if s.price_date else ""
+            parts.append(f"  - {s.label}{field}: {s.price}{date} [{s.source_id}]")
+
+    if external:
+        parts.append("")
+        parts.append("Berdasarkan sumber online:")
+        for s in external:
+            parts.append(f"  - {s.label}: {s.price} [{s.source_id}]")
+
+    if internal and external:
+        parts.append("")
+        parts.append("Perbandingan: data internal menunjukkan harga yang umumnya lebih rendah dari beberapa sumber online.")
+
+    parts.append("")
+    parts.append("_Catatan: Harga dapat berubah sewaktu-waktu. Selalu verifikasi ke sumber resmi._")
+    return "\n".join(parts)
 
 
-def _format_date_id_from_iso(iso: str) -> str:
-    """Format ISO date string (or 'YYYY-Qn' / 'YYYY-MM-DD/YYYY-MM-DD') as ID."""
-    if not iso:
-        return ""
-    if "/" in iso:
-        parts = iso.split("/")
-        if len(parts) == 2:
-            return f"{_format_date_id_from_iso(parts[0])} – {_format_date_id_from_iso(parts[1])}"
-    if "-Q" in iso:
-        return iso.replace("-Q", " Q")  # "2024 Q1"
-    if iso.count("-") == 2:
-        try:
-            y, m, d = iso.split("-")
-            return f"{int(d)} {ID_MONTHS[int(m)]} {y}"
-        except (ValueError, IndexError):
-            pass
-    return iso
+# ── Helpers ────────────────────────────────────────────
 
 
-def _field_label_for(field_type: str) -> str:
+def _format_internal_label(r: PriceResult) -> str:
+    """Build human-readable label for internal source."""
+    parts: list[str] = []
+    if r.source_detail:
+        if r.source == "postgres_ohlc":
+            parts.append(f"Database OHLC ({r.source_detail})")
+        elif r.source == "csv":
+            parts.append(f"File CSV ({r.source_detail})")
+        elif r.source == "xlsx":
+            parts.append(f"File Excel ({r.source_detail})")
+        else:
+            parts.append(f"Database ({r.source_detail})")
+    else:
+        parts.append(f"Database ({r.source})")
+    if r.product_name and r.product_name not in parts[0]:
+        parts.append(r.product_name)
+    return " - ".join(parts)
+
+
+def _field_label_id(field_type: str) -> str:
     labels = {
         "high": "Tertinggi",
         "low": "Terendah",
@@ -228,7 +259,7 @@ def _field_label_for(field_type: str) -> str:
         "close": "Penutupan",
         "latest": "Terbaru",
     }
-    return labels.get(field_type, "")
+    return labels.get(field_type, field_type)
 
 
 def _build_query_summary(intent: PriceIntent) -> str:
@@ -243,14 +274,6 @@ def _build_query_summary(intent: PriceIntent) -> str:
     if intent.target_date:
         parts.append(f"pada {_format_date_id(intent.target_date)}")
     elif intent.date_range_start and intent.date_range_end:
-        if intent.date_range_start == intent.date_range_end.replace(
-            day=__import__("datetime").date(
-                intent.date_range_end.year,
-                intent.date_range_end.month,
-                1,
-            ).day if False else 1
-        ) if False else False:
-            pass
         rs = _format_date_id(intent.date_range_start)
         re_ = _format_date_id(intent.date_range_end)
         if rs == re_:
@@ -263,60 +286,16 @@ def _build_query_summary(intent: PriceIntent) -> str:
     return " ".join(parts) if parts else "Harga"
 
 
-# ── Markdown output (for LLM context) ───────────────────
-
-
-def price_table_to_markdown(table: GroupedPriceTable) -> str:
-    """Render table as markdown for LLM context."""
-    if not table.internal_cards and not table.external_cards:
+def _format_date_id(d) -> str:
+    """Format date as Indonesian short: '10 Jan 2025'."""
+    if d is None:
         return ""
-
-    lines: list[str] = []
-    if table.query_summary:
-        lines.append(f"**{table.query_summary}**\n")
-    if table.internal_cards:
-        lines.append("## 📊 Data Internal\n")
-        for c in table.internal_cards:
-            field = f" [{c.field_label}]" if c.field_label else ""
-            date = f" ({c.date})" if c.date else ""
-            lines.append(
-                f"- **{c.product}**{field}: {c.price}{date} "
-                f"_— {c.source_detail}_"
-            )
-        lines.append("")
-    if table.external_cards:
-        lines.append("## 🌐 Pembanding Web\n")
-        for c in table.external_cards:
-            field = f" [{c.field_label}]" if c.field_label else ""
-            date = f" ({c.date})" if c.date else ""
-            lines.append(
-                f"- **{c.product}**{field}: {c.price}{date} "
-                f"_— {c.source_detail}_"
-            )
-        lines.append("")
-    return "\n".join(lines)
+    return f"{d.day} {ID_MONTHS[d.month]} {d.year}"
 
 
-# ── System prompt — strict anti-hallucination ───────────
-
-PRICE_SYSTEM_PROMPT = """\
-Anda adalah asisten yang membantu menjawab pertanyaan tentang HARGA produk/layanan.
-
-ATURAN KETAT:
-1. CONTEXT berisi data terstruktur. GUNAKAN ANGKA PERSIS dari CONTEXT.
-2. JANGAN mengubah format angka (mis. "Rp 1.500.000" tidak boleh jadi "1,5 juta").
-3. JANGAN menambah digit atau membulatkan sendiri.
-4. Untuk pertanyaan "tertinggi/terendah", gunakan field yang sesuai (High/Low).
-5. Setiap klaim HARUS menyebut field label dan tanggal sumber.
-6. Data INTERNAL lebih otoritatif daripada data WEB.
-7. Data WEB hanya sebagai "pembanding", bukan harga definitif.
-8. Disclaimer SELALU di akhir jawaban.
-9. JANGAN menyebut "CONTEXT", "CHUNK", atau terminologi teknis dalam jawaban.
-10. Gunakan Bahasa Indonesia yang profesional dan ringkas.
-"""
+# ── Backward-compat: legacy function kept ───────────────
 
 
-# Backward-compat: legacy function for old code
 def build_price_table(
     internal_results: list[PriceResult],
     web_results: list[dict],
@@ -325,7 +304,7 @@ def build_price_table(
     max_internal: int = 5,
     max_web: int = 5,
 ):
-    """Legacy function — returns PriceTable for backward compat with old tests."""
+    """Legacy function — returns simple PriceTable for backward compat."""
     from dataclasses import dataclass as _dc
 
     @_dc
@@ -360,7 +339,7 @@ def build_price_table(
             "url": None,
             "confidence": r.relevance_score,
             "field_type": r.field_type or "",
-            "field_label": _field_label_for(r.field_type),
+            "field_label": _field_label_id(r.field_type),
         })
     for w in web_results[:max_web]:
         snippet = w.get("snippet", "")
@@ -385,6 +364,6 @@ def build_price_table(
             "url": w.get("url"),
             "confidence": top.confidence,
             "field_type": top.field_type or "",
-            "field_label": _field_label_for(top.field_type),
+            "field_label": _field_label_id(top.field_type),
         })
     return table

@@ -76,18 +76,35 @@ class PriceService:
     def lookup_by_name(
         self, name: str, category: str | None = None, limit: int = 10
     ) -> list[PriceResult]:
-        """Lookup by product name. Returns latest price for each match."""
+        """Lookup by product name. Returns latest price for each match.
+
+        Uses multi-strategy search:
+        1. Exact substring match
+        2. Drop first word (e.g., "speaker") and retry — handles cases like
+           "speaker Polytron X" matching "SPEAKER AKTIF POLYTRON X"
+        3. Drop last word — handles queries like "Polytron X terbaru"
+        """
         if not name or len(name.strip()) < 2:
             return []
 
-        pattern = f"%{name.strip()}%"
-        query = self.db.query(Product).filter(
-            Product.is_active == True,  # noqa: E712
-            Product.name.ilike(pattern),
-        )
-        if category:
-            query = query.filter(Product.category == category)
-        products = query.limit(limit * 2).all()
+        # Try multiple name strategies
+        strategies = self._build_name_strategies(name)
+        seen_product_ids: set = set()
+        products: list = []
+
+        for strategy_name in strategies:
+            query = self.db.query(Product).filter(
+                Product.is_active == True,  # noqa: E712
+                Product.name.ilike(f"%{strategy_name}%"),
+            )
+            if category:
+                query = query.filter(Product.category == category)
+            for p in query.limit(limit * 2).all():
+                if p.id not in seen_product_ids:
+                    seen_product_ids.add(p.id)
+                    products.append(p)
+            if len(products) >= limit:
+                break
 
         results: list[PriceResult] = []
         for p in products:
@@ -126,6 +143,37 @@ class PriceService:
                 )
         results.sort(key=lambda r: r.relevance_score, reverse=True)
         return results[:limit]
+
+    @staticmethod
+    def _build_name_strategies(name: str) -> list[str]:
+        """Build list of name variations to try, in priority order.
+
+        Strategy:
+        1. Full name as-is
+        2. Drop first word (generic category like "speaker", "LED")
+        3. Drop last word (e.g., "terbaru", "hari ini")
+        4. Take longest 2-word substring from end (brand + model)
+        """
+        strategies: list[str] = []
+        cleaned = name.strip()
+        if cleaned:
+            strategies.append(cleaned)
+
+        words = cleaned.split()
+        if len(words) >= 2:
+            # Drop first word
+            strategies.append(" ".join(words[1:]))
+        if len(words) >= 2:
+            # Drop last word
+            strategies.append(" ".join(words[:-1]))
+        if len(words) >= 2:
+            # Take last 2 words (likely brand+model)
+            strategies.append(" ".join(words[-2:]))
+        if len(words) >= 3:
+            # Take last 3 words
+            strategies.append(" ".join(words[-3:]))
+
+        return strategies
 
     # ── 2. Timeseries lookup (date-based) ────────────────
 

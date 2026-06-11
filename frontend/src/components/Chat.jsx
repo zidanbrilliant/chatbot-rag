@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { sendQuery } from "../api";
-import PriceTable from "./PriceTable";
+import PriceCitations from "./PriceCitations";
 
 export default function Chat() {
   const [sessionId, setSessionId] = useState(null);
@@ -121,13 +121,13 @@ export default function Chat() {
                   <span className="typing-dot" />
                 </span>
               )}
-              {m.metadata?.price_table && m.metadata.price_table.length > 0 && !m._streaming && (
-                <PriceTable
-                  rows={m.metadata.price_table}
+              {m.metadata?.nl_sources && m.metadata.nl_sources.length > 0 && !m._streaming && (
+                <PriceCitations
+                  sources={m.metadata.nl_sources}
                   intent={m.metadata.intent}
                 />
               )}
-              {m.sources && m.sources.length > 0 && !m._streaming && (
+              {m.sources && m.sources.length > 0 && !m._streaming && !m.metadata?.nl_sources && (
                 <div className="sources">
                   {m.sources.filter(s => s.source_type === "internal").length > 0 && (
                     <div className="source-group">

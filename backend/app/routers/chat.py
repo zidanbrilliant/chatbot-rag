@@ -46,9 +46,10 @@ from app.services.llm_client import (
 from app.services.qdrant_client import get_qdrant, multi_source_search
 from app.services.price_service import PriceService
 from app.services.response_formatter import (
-    PRICE_SYSTEM_PROMPT,
-    build_grouped_price_table,
-    price_table_to_markdown,
+    PRICE_NL_SYSTEM_PROMPT,
+    build_fallback_nl,
+    build_llm_context,
+    build_nl_response,
 )
 from app.services.structured_extractor import extract_tabular_fact
 from app.services.answerability import ABSTAIN_MESSAGE, evaluate as evaluate_answerability
@@ -309,44 +310,53 @@ def _handle_price_query(
     if not all_internal and not web_results:
         return None
 
-    # Build grouped price table
-    table = build_grouped_price_table(
+    # Build NL response with citation registry (NO markdown table)
+    nl_resp = build_nl_response(
         internal_results=all_internal,
         web_results=web_results,
         intent=intent,
     )
 
-    if not table.internal_cards and not table.external_cards:
+    if not nl_resp.sources:
         return None
 
-    # Build markdown context for LLM
-    context = price_table_to_markdown(table)
-    if not context:
-        return None
+    # Build LLM context with [N] citation markers
+    context = build_llm_context(nl_resp, intent)
 
-    # LLM generates NL intro
+    # LLM generates NL answer with inline citations
     try:
-        nl_intro = generate_response(
-            PRICE_SYSTEM_PROMPT,
+        nl_answer = generate_response(
+            PRICE_NL_SYSTEM_PROMPT,
             context=context,
             history=history,
             query=query,
         )
     except Exception as e:
         logger.warning("Price LLM generation failed: %s", str(e)[:120])
-        nl_intro = ""
+        nl_answer = ""
 
-    # Compose final reply
-    disclaimer = "\n\n_Catatan: Harga dapat berubah sewaktu-waktu. Selalu verifikasi ke sumber resmi._"
-    if table.internal_cards or table.external_cards:
-        if nl_intro:
-            reply = f"{nl_intro}{disclaimer}"
-        else:
-            reply = f"Berikut perbandingan harga:{disclaimer}"
+    # Build final reply
+    if nl_answer and "tidak ditemukan" not in nl_answer.lower()[:200]:
+        reply = nl_answer
     else:
-        reply = "Harga tidak ditemukan untuk produk tersebut."
+        # LLM might have returned abstain — use fallback builder (no hallucination)
+        reply = build_fallback_nl(nl_resp, intent)
 
-    # Build sources for frontend
+    # Add disclaimer if not already present
+    if "dapat berubah" not in reply.lower():
+        reply = reply + "\n\n_Catatan: Harga dapat berubah sewaktu-waktu. Selalu verifikasi ke sumber resmi._"
+
+    # Confidence
+    if all_internal and web_results:
+        confidence = "high"
+    elif all_internal:
+        confidence = "high"
+    elif web_results:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    # Build minimal sources for backward compat (not used by new NL UI)
     sources: list[Source] = []
     seen: set = set()
     for r in all_internal[:5]:
@@ -367,25 +377,16 @@ def _handle_price_query(
                 title=w.get("title", ""),
             ))
 
-    # Confidence
-    if all_internal and web_results:
-        confidence = "high"
-    elif all_internal:
-        confidence = "high"
-    elif web_results:
-        confidence = "medium"
-    else:
-        confidence = "low"
-
     return QueryResponse(
         session_id="",
         reply=reply,
         sources=sources,
         confidence=confidence,
         metadata={
-            "price_table": table.to_dict_list(),
-            "intent": table.intent,
-            "query_summary": table.query_summary,
+            # New: source list for inline citation rendering
+            "nl_sources": [s.to_dict() for s in nl_resp.sources],
+            "intent": nl_resp.intent,
+            "query_summary": nl_resp.query_summary,
         },
     )
 

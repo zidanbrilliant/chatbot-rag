@@ -8,22 +8,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.services.intent_classifier import PriceIntent
 from app.services.price_service import PriceResult
 from app.services.response_formatter import (
-    build_grouped_price_table,
-    price_table_to_markdown,
-    _format_price_full,
+    build_nl_response,
+    build_llm_context,
+    build_fallback_nl,
     _format_date_id,
 )
 
 
-# ── Empty cases ────────────────────────────────────────
+# ── build_nl_response ──────────────────────────────────
 
 
 def test_empty_internal_no_web():
     intent = PriceIntent(is_price_query=True, query_type="catalog", target="X")
-    table = build_grouped_price_table([], [], intent)
-    assert table.internal_cards == []
-    assert table.external_cards == []
-    assert price_table_to_markdown(table) == ""
+    nl = build_nl_response([], [], intent)
+    assert nl.sources == []
 
 
 def test_only_internal_results():
@@ -43,18 +41,15 @@ def test_only_internal_results():
             field_type="latest",
         )
     ]
-    table = build_grouped_price_table(internal, [], intent)
-    assert len(table.internal_cards) == 1
-    assert "Beras" in table.internal_cards[0].product
-    assert "IDR" in table.internal_cards[0].price
-    assert "75,000" in table.internal_cards[0].price
-    assert table.internal_cards[0].type == "internal"
+    nl = build_nl_response(internal, [], intent)
+    assert len(nl.sources) == 1
+    assert nl.sources[0].source_type == "internal"
+    assert "Beras" in nl.sources[0].label or "Beras" in nl.sources[0].snippet
+    assert nl.sources[0].price == "IDR 75,000"
 
 
-# ── Grouping ───────────────────────────────────────────
-
-
-def test_internal_external_separated():
+def test_internal_external_in_source_list():
+    """Internal gets IDs 1,2,3... External continues from there."""
     intent = PriceIntent(
         is_price_query=True, query_type="catalog", target="iPhone"
     )
@@ -63,7 +58,6 @@ def test_internal_external_separated():
             product_name="iPhone 15 Pro",
             price=Decimal("15000000"),
             currency="IDR",
-            unit="pcs",
             source="postgres",
             source_detail="APL-IP15P",
         ),
@@ -73,13 +67,6 @@ def test_internal_external_separated():
             "title": "Tokopedia",
             "url": "https://tokopedia.link/x",
             "snippet": "harga iPhone 15 Pro Rp 15.500.000",
-            "context_prices": [
-                type("P", (), {
-                    "value": 15_500_000.0, "currency": "IDR",
-                    "field_type": "", "date_context": "",
-                    "confidence": 0.7, "raw_match": "Rp 15.500.000",
-                })()
-            ],
             "best_price": type("P", (), {
                 "value": 15_500_000.0, "currency": "IDR",
                 "field_type": "", "date_context": "",
@@ -87,55 +74,101 @@ def test_internal_external_separated():
             })(),
         },
     ]
-    table = build_grouped_price_table(internal, web, intent)
-    assert len(table.internal_cards) == 1
-    assert len(table.external_cards) == 1
-    assert table.internal_cards[0].type == "internal"
-    assert table.external_cards[0].type == "external"
+    nl = build_nl_response(internal, web, intent)
+    assert len(nl.sources) == 2
+    assert nl.sources[0].source_id == 1
+    assert nl.sources[0].source_type == "internal"
+    assert nl.sources[1].source_id == 2
+    assert nl.sources[1].source_type == "external"
 
 
-# ── Field labels ───────────────────────────────────────
+# ── LLM context with [N] markers ───────────────────────
 
 
-def test_field_label_high():
+def test_llm_context_has_citation_markers():
     intent = PriceIntent(
-        is_price_query=True, query_type="range", target="Bitcoin",
-        field_type="high",
+        is_price_query=True, query_type="catalog", target="Beras"
     )
     internal = [
         PriceResult(
-            product_name="Bitcoin",
-            price=Decimal("1080000000"),
+            product_name="Beras Premium 5kg",
+            price=Decimal("75000"),
             currency="IDR",
-            source="postgres_ohlc",
-            source_detail="BTC | MAX high 2024-01-01..2024-12-31",
-            price_date=date(2024, 12, 1),
-            field_type="high",
+            source="postgres",
+            source_detail="SKU-001",
         ),
     ]
-    table = build_grouped_price_table(internal, [], intent)
-    assert table.internal_cards[0].field_label == "Tertinggi"
-    assert table.field_label == "Tertinggi"
+    nl = build_nl_response(internal, [], intent)
+    context = build_llm_context(nl, intent)
+    assert "[1]" in context
+    assert "SKU-001" in context or "Beras" in context
 
 
-def test_field_label_low():
-    intent = PriceIntent(
-        is_price_query=True, query_type="range", target="Bitcoin",
-        field_type="low",
-    )
+def test_llm_context_strict_rules():
+    """Context must contain anti-hallucination instructions."""
+    intent = PriceIntent(is_price_query=True, query_type="catalog")
+    nl = build_nl_response([], [], intent)
+    context = build_llm_context(nl, intent)
+    assert "JANGAN" in context or "tidak ditemukan" in context.lower()
+
+
+# ── Fallback NL builder ────────────────────────────────
+
+
+def test_fallback_nl_with_internal_only():
+    intent = PriceIntent(is_price_query=True, query_type="catalog", target="Beras")
     internal = [
         PriceResult(
-            product_name="Bitcoin",
-            price=Decimal("380000000"),
+            product_name="Beras Premium 5kg",
+            price=Decimal("75000"),
             currency="IDR",
-            source="postgres_ohlc",
-            source_detail="BTC | MIN low 2024-01-01..2024-12-31",
-            price_date=date(2024, 1, 1),
-            field_type="low",
+            source="postgres",
+            source_detail="SKU-001",
         ),
     ]
-    table = build_grouped_price_table(internal, [], intent)
-    assert table.internal_cards[0].field_label == "Terendah"
+    nl = build_nl_response(internal, [], intent)
+    fallback = build_fallback_nl(nl, intent)
+    assert "Beras" in fallback
+    assert "75,000" in fallback
+    assert "[1]" in fallback
+    assert "dapat berubah" in fallback.lower()
+
+
+def test_fallback_nl_with_comparison():
+    intent = PriceIntent(is_price_query=True, query_type="catalog", target="Beras")
+    internal = [
+        PriceResult(
+            product_name="Beras Premium 5kg",
+            price=Decimal("75000"),
+            currency="IDR",
+            source="postgres",
+            source_detail="SKU-001",
+        ),
+    ]
+    web = [
+        {
+            "title": "Tokopedia",
+            "url": "https://tokopedia.link/x",
+            "snippet": "Beras Rp 78.000",
+            "best_price": type("P", (), {
+                "value": 78000.0, "currency": "IDR",
+                "field_type": "", "date_context": "",
+                "confidence": 0.6, "raw_match": "Rp 78.000",
+            })(),
+        },
+    ]
+    nl = build_nl_response(internal, web, intent)
+    fallback = build_fallback_nl(nl, intent)
+    assert "Database" in fallback or "internal" in fallback.lower()
+    assert "online" in fallback.lower() or "web" in fallback.lower()
+    assert "Perbandingan" in fallback
+
+
+def test_fallback_nl_empty_sources():
+    intent = PriceIntent(is_price_query=True, query_type="catalog")
+    nl = build_nl_response([], [], intent)
+    fallback = build_fallback_nl(nl, intent)
+    assert "tidak ditemukan" in fallback.lower()
 
 
 # ── Date format (Indonesian) ───────────────────────────
@@ -155,34 +188,11 @@ def test_date_format_december():
     assert _format_date_id(date(2024, 12, 31)) == "31 Des 2024"
 
 
-# ── Price format (full, no abbreviation) ───────────────
+# ── Source dict for frontend ──────────────────────────
 
 
-def test_price_format_full_idr():
-    assert _format_price_full(75000, "IDR") == "IDR 75,000"
-
-
-def test_price_format_full_usd():
-    assert _format_price_full(1500, "USD") == "USD 1,500"
-
-
-def test_price_format_full_large():
-    assert _format_price_full(1500000000, "IDR") == "IDR 1,500,000,000"
-
-
-def test_price_format_full_decimal():
-    result = _format_price_full(1250.50, "USD")
-    assert "USD" in result
-    assert "1,250.50" in result
-
-
-# ── Markdown output ───────────────────────────────────
-
-
-def test_markdown_includes_internal_section():
-    intent = PriceIntent(
-        is_price_query=True, query_type="catalog", target="Beras"
-    )
+def test_source_to_dict():
+    intent = PriceIntent(is_price_query=True, query_type="catalog", target="Beras")
     internal = [
         PriceResult(
             product_name="Beras Premium 5kg",
@@ -190,127 +200,13 @@ def test_markdown_includes_internal_section():
             currency="IDR",
             source="postgres",
             source_detail="SKU-001",
+            price_date=date(2025, 1, 10),
         ),
     ]
-    table = build_grouped_price_table(internal, [], intent)
-    md = price_table_to_markdown(table)
-    assert "Data Internal" in md
-    assert "Beras" in md
-    assert "SKU-001" in md
-
-
-def test_markdown_includes_external_section():
-    intent = PriceIntent(
-        is_price_query=True, query_type="catalog", target="Beras"
-    )
-    web = [
-        {
-            "title": "Tokopedia - Beras",
-            "url": "https://tokopedia.link/beras",
-            "snippet": "Beras Rp 78.000",
-            "context_prices": [
-                type("P", (), {
-                    "value": 78000.0, "currency": "IDR",
-                    "field_type": "", "date_context": "",
-                    "confidence": 0.6, "raw_match": "Rp 78.000",
-                })()
-            ],
-            "best_price": type("P", (), {
-                "value": 78000.0, "currency": "IDR",
-                "field_type": "", "date_context": "",
-                "confidence": 0.6, "raw_match": "Rp 78.000",
-            })(),
-        },
-    ]
-    table = build_grouped_price_table([], web, intent)
-    md = price_table_to_markdown(table)
-    assert "Pembanding Web" in md
-    assert "Tokopedia" in md
-
-
-def test_markdown_includes_query_summary():
-    intent = PriceIntent(
-        is_price_query=True, query_type="range", target="Bitcoin",
-        field_type="high",
-        date_range_start=date(2024, 1, 1),
-        date_range_end=date(2024, 12, 31),
-    )
-    internal = [
-        PriceResult(
-            product_name="Bitcoin",
-            price=Decimal("1080000000"),
-            currency="IDR",
-            source="postgres_ohlc",
-            source_detail="BTC",
-            field_type="high",
-        ),
-    ]
-    table = build_grouped_price_table(internal, [], intent)
-    md = price_table_to_markdown(table)
-    # Should have summary
-    assert "Tertinggi" in md or "Bitcoin" in md
-
-
-# ── Dict list for frontend ─────────────────────────────
-
-
-def test_dict_list_structure():
-    intent = PriceIntent(
-        is_price_query=True, query_type="catalog", target="A"
-    )
-    internal = [
-        PriceResult(
-            product_name="A", price=Decimal("100"), currency="IDR",
-            source="postgres", source_detail="sku-a", field_type="latest",
-        ),
-    ]
-    web = [
-        {
-            "title": "Web",
-            "url": "https://x.com",
-            "snippet": "harga Rp 200.000",
-            "context_prices": [
-                type("P", (), {
-                    "value": 200000.0, "currency": "IDR",
-                    "field_type": "", "date_context": "",
-                    "confidence": 0.6, "raw_match": "Rp 200.000",
-                })()
-            ],
-            "best_price": type("P", (), {
-                "value": 200000.0, "currency": "IDR",
-                "field_type": "", "date_context": "",
-                "confidence": 0.6, "raw_match": "Rp 200.000",
-            })(),
-        },
-    ]
-    table = build_grouped_price_table(internal, web, intent)
-    dicts = table.to_dict_list()
-    assert len(dicts) == 2
-    # Internal comes first
-    assert dicts[0]["type"] == "internal"
-    assert dicts[1]["type"] == "external"
-    # All have required fields
-    for d in dicts:
-        assert "source" in d
-        assert "product" in d
-        assert "price" in d
-        assert "field_label" in d
-        assert "field_type" in d
-        assert "date" in d
-
-
-# ── Intent metadata ────────────────────────────────────
-
-
-def test_intent_metadata_field_type():
-    intent = PriceIntent(
-        is_price_query=True, query_type="range", target="Bitcoin",
-        field_type="high",
-        date_range_start=date(2024, 1, 1),
-        date_range_end=date(2024, 12, 31),
-    )
-    table = build_grouped_price_table([], [], intent)
-    assert table.intent["field_type"] == "high"
-    assert table.intent["field_label"] == "Tertinggi"
-    assert table.intent["date_range_start"] == "2024-01-01"
-    assert table.intent["date_range_end"] == "2024-12-31"
+    nl = build_nl_response(internal, [], intent)
+    src_dict = nl.sources[0].to_dict()
+    assert "id" in src_dict
+    assert "label" in src_dict
+    assert "type" in src_dict
+    assert "price" in src_dict
+    assert src_dict["price_date"] == "2025-01-10"
