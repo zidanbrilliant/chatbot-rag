@@ -91,18 +91,27 @@ export default function AdminPanel() {
 
       <table>
         <thead>
-          <tr><th>File Name</th><th>Size</th><th>Status</th><th>Uploaded</th><th>Action</th></tr>
+          <tr><th>File Name</th><th>Size</th><th>Status</th><th>Type</th><th>Uploaded</th><th>Action</th></tr>
         </thead>
         <tbody>
-          {filteredDocs.map(d => (
-            <tr key={d.id}>
-              <td>{d.original_filename || '-'}</td>
-              <td>{formatSize(d.size_bytes)}</td>
-              <td><span className="status" style={{ background: statusColor(d.status) }}>{d.status}</span></td>
-              <td>{d.created_at ? new Date(d.created_at).toLocaleDateString() : '-'}</td>
-              <td><button onClick={() => handleDelete(d.id)} className="delete-btn">Delete</button></td>
-            </tr>
-          ))}
+          {filteredDocs.map(d => {
+            const attr = d.attributes || {}
+            const isCatalog = attr.ingestion_type === 'csv_catalog'
+            return (
+              <tr key={d.id}>
+                <td>{d.original_filename || '-'}</td>
+                <td>{formatSize(d.size_bytes)}</td>
+                <td><span className="status" style={{ background: statusColor(d.status) }}>{d.status}</span></td>
+                <td>
+                  {isCatalog
+                    ? <span title={`${attr.products_count || 0} products imported directly to DB`}>📦 catalog ({attr.products_count || 0})</span>
+                    : '🔍 vector'}
+                </td>
+                <td>{d.created_at ? new Date(d.created_at).toLocaleDateString() : '-'}</td>
+                <td><button onClick={() => handleDelete(d.id)} className="delete-btn">Delete</button></td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
 
