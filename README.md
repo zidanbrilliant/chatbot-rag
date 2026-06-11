@@ -587,7 +587,8 @@ Response:
 | **Redis cache web search** | Query yang sama dalam 1 jam tidak perlu search ulang ke DuckDuckGo. Cache key = SHA256(query). |
 | **Chunk-ID citation dual** | Bukan semantic similarity post-hoc. LLM diminta pakai `[C1]` untuk internal, `[W1]` untuk web — divalidasi regex. |
 | **Non-streaming endpoint** | SSE streaming uvicorn corrupted pada async generator pendek. |
-| **`native_enum=False`** | SAEnum PostgreSQL menyimpan `.name` (uppercase). Solusi: VARCHAR + string literal. |
+| **`native_enum=False` + `values_callable`** | SAEnum PostgreSQL menyimpan string. `values_callable=lambda obj: [e.value for e in obj]` memaksa validasi pakai enum value (lowercase) agar cocok dengan data di DB. |
+| **CSV catalog skip embedding** | CSV Barang/Brand/Tipe/Harga di-parse langsung ke tabel `products` (SQL ILIKE cukup untuk retrieval). Hemat 175×N chunks dan tidak butuh Ollama untuk catalog ingestion. |
 | **PII redaction sebelum web search** | Query di-redact (NIK, email, phone) sebelum dikirim ke DuckDuckGo. |
 | **Audit log untuk web search** | Setiap web search call tercatat di tabel `audit_logs` (query, provider, latency, results_count). |
 
@@ -606,6 +607,11 @@ make test-cov      # with coverage report
 # Docker
 docker compose logs backend -f   # Backend logs
 docker compose logs worker -f    # Worker logs
+
+# Cleanup failed/duplicate documents (dari folder backend/)
+python -m app.scripts.cleanup_failed_documents           # list only
+python -m app.scripts.cleanup_failed_documents --all --dry-run   # preview
+python -m app.scripts.cleanup_failed_documents --all --yes       # apply
 
 # Debug
 docker compose exec backend python -c "from app.config import SIMILARITY_THRESHOLD; print(SIMILARITY_THRESHOLD)"
