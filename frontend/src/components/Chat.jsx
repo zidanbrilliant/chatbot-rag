@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { sendQuery } from "../api";
+import PriceTable from "./PriceTable";
 
 export default function Chat() {
   const [sessionId, setSessionId] = useState(null);
@@ -45,11 +46,17 @@ export default function Chat() {
               content: data.reply || "",
               _streaming: false,
               sources: data.sources || [],
+              metadata: data.metadata || {},
             };
             return updated;
           }
         }
-        updated.push({ role: "assistant", content: data.reply || "", sources: data.sources || [] });
+        updated.push({
+          role: "assistant",
+          content: data.reply || "",
+          sources: data.sources || [],
+          metadata: data.metadata || {},
+        });
         return updated;
       });
     } catch {
@@ -113,6 +120,12 @@ export default function Chat() {
                   <span className="typing-dot" />
                   <span className="typing-dot" />
                 </span>
+              )}
+              {m.metadata?.price_table && m.metadata.price_table.length > 0 && !m._streaming && (
+                <PriceTable
+                  rows={m.metadata.price_table}
+                  intent={m.metadata.intent}
+                />
               )}
               {m.sources && m.sources.length > 0 && !m._streaming && (
                 <div className="sources">

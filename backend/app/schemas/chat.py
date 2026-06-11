@@ -23,6 +23,7 @@ class QueryResponse(BaseModel):
     confidence: str = ""  # high | medium | low | abstain
     fallback_triggered: bool = False
     out_of_context: bool = False
+    metadata: dict = {}  # e.g. {"price_table": [...]} for price queries
 
 
 class FallbackRequest(BaseModel):

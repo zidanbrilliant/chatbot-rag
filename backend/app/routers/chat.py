@@ -30,6 +30,7 @@ from app.schemas.chat import (
     Source,
 )
 from app.services.embedding import generate_embedding
+from app.services.intent_classifier import detect_price_intent
 from app.services.llm_client import (
     expand_synonyms,
     format_context_with_ids,
@@ -43,12 +44,19 @@ from app.services.llm_client import (
     validate_citations,
 )
 from app.services.qdrant_client import get_qdrant, multi_source_search
+from app.services.price_service import PriceService
+from app.services.response_formatter import (
+    PRICE_SYSTEM_PROMPT,
+    build_grouped_price_table,
+    price_table_to_markdown,
+)
 from app.services.structured_extractor import extract_tabular_fact
 from app.services.answerability import ABSTAIN_MESSAGE, evaluate as evaluate_answerability
 from app.services.sanitizer import scan_and_redact
 from app.services.search_client import search_web
 from app.services.search_cache import get_cached_results, cache_search_results
 from app.services.audit_log import log_web_search, log_rag_query
+from app.services.web_filter import filter_web_by_context, relax_filter
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
@@ -200,6 +208,188 @@ def _search_web_with_cache(query: str) -> list[dict]:
     return result_dicts
 
 
+def _handle_price_query(
+    query: str,
+    db: Session,
+    history: str,
+) -> QueryResponse | None:
+    """Handle price queries with field/date context awareness.
+
+    Uses:
+    - PriceService (Postgres) for catalog/timeseries/range/multi-criteria
+    - Web strict filter for context-matched external comparison
+    - Grouped response formatter (internal cards + external collapsible)
+
+    Returns QueryResponse if query is a price query, else None.
+    """
+    intent = detect_price_intent(query)
+    if not intent.is_price_query:
+        return None
+
+    logger.info(
+        "Price query branch: type=%s field=%s target='%s' date=%s range=%s..%s agg=%s",
+        intent.query_type, intent.field_type, intent.target[:50],
+        intent.target_date, intent.date_range_start, intent.date_range_end,
+        intent.aggregation,
+    )
+
+    service = PriceService(db)
+
+    # Parallel: postgres + file scan + web search
+    internal_results: list = []
+    file_results: list = []
+    web_results: list = []
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        # Route to appropriate PriceService method based on intent
+        if intent.query_type == "timeseries" and intent.target_date:
+            if intent.field_type in ("high", "low", "open", "close"):
+                f_pg = executor.submit(
+                    service.lookup_ohlc_by_date,
+                    intent.target, intent.target_date, intent.field_type,
+                )
+            else:
+                f_pg = executor.submit(
+                    service.lookup_by_date,
+                    intent.target, intent.target_date, intent.field_type or "close",
+                )
+        elif intent.query_type == "range" and intent.date_range_start and intent.date_range_end:
+            f_pg = executor.submit(
+                service.lookup_ohlc_by_range,
+                intent.target,
+                intent.date_range_start, intent.date_range_end,
+                intent.field_type or "high",
+                intent.aggregation or "max",
+            )
+        elif intent.query_type == "multi_criteria":
+            f_pg = executor.submit(
+                service.lookup_multi_criteria,
+                name=intent.target or None,
+                category=intent.category,
+                min_price=None,
+                max_price=None,
+            )
+        else:
+            f_pg = executor.submit(
+                service.lookup_by_name, intent.target, intent.category
+            )
+        f_files = executor.submit(service.search_from_files, query)
+        f_web = executor.submit(_search_web_with_cache, query)
+
+        try:
+            internal_results = f_pg.result(timeout=10) or []
+        except Exception as e:
+            logger.warning("PriceService postgres failed: %s", str(e)[:120])
+            internal_results = []
+        try:
+            file_results = f_files.result(timeout=10) or []
+        except Exception as e:
+            logger.warning("PriceService files failed: %s", str(e)[:120])
+            file_results = []
+        try:
+            web_results = f_web.result(timeout=15) or []
+        except Exception as e:
+            logger.warning("PriceService web failed: %s", str(e)[:120])
+            web_results = []
+
+    all_internal = internal_results + file_results
+
+    # Apply strict web filter based on intent context
+    if web_results:
+        try:
+            filtered_web = filter_web_by_context(web_results, intent)
+            if not filtered_web:
+                # Fallback: relax filter to avoid empty results
+                logger.info("Strict web filter empty — using relaxed")
+                filtered_web = relax_filter(web_results, intent)
+            web_results = filtered_web
+        except Exception as e:
+            logger.warning("Web filter failed: %s", str(e)[:120])
+
+    if not all_internal and not web_results:
+        return None
+
+    # Build grouped price table
+    table = build_grouped_price_table(
+        internal_results=all_internal,
+        web_results=web_results,
+        intent=intent,
+    )
+
+    if not table.internal_cards and not table.external_cards:
+        return None
+
+    # Build markdown context for LLM
+    context = price_table_to_markdown(table)
+    if not context:
+        return None
+
+    # LLM generates NL intro
+    try:
+        nl_intro = generate_response(
+            PRICE_SYSTEM_PROMPT,
+            context=context,
+            history=history,
+            query=query,
+        )
+    except Exception as e:
+        logger.warning("Price LLM generation failed: %s", str(e)[:120])
+        nl_intro = ""
+
+    # Compose final reply
+    disclaimer = "\n\n_Catatan: Harga dapat berubah sewaktu-waktu. Selalu verifikasi ke sumber resmi._"
+    if table.internal_cards or table.external_cards:
+        if nl_intro:
+            reply = f"{nl_intro}{disclaimer}"
+        else:
+            reply = f"Berikut perbandingan harga:{disclaimer}"
+    else:
+        reply = "Harga tidak ditemukan untuk produk tersebut."
+
+    # Build sources for frontend
+    sources: list[Source] = []
+    seen: set = set()
+    for r in all_internal[:5]:
+        key = r.source_detail
+        if key and key not in seen:
+            seen.add(key)
+            sources.append(Source(
+                file_name=r.source_detail,
+                source_type="internal",
+            ))
+    for w in web_results[:3]:
+        url = w.get("url", "")
+        if url and url not in seen:
+            seen.add(url)
+            sources.append(Source(
+                source_type="external",
+                url=url,
+                title=w.get("title", ""),
+            ))
+
+    # Confidence
+    if all_internal and web_results:
+        confidence = "high"
+    elif all_internal:
+        confidence = "high"
+    elif web_results:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    return QueryResponse(
+        session_id="",
+        reply=reply,
+        sources=sources,
+        confidence=confidence,
+        metadata={
+            "price_table": table.to_dict_list(),
+            "intent": table.intent,
+            "query_summary": table.query_summary,
+        },
+    )
+
+
 @router.post("/query", response_model=QueryResponse)
 def chat_query(req: QueryRequest, db: Session = Depends(get_db)):
     query = _sanitize(req.query)
@@ -228,6 +418,20 @@ def chat_query(req: QueryRequest, db: Session = Depends(get_db)):
         )
 
     history = get_history(session.session_id, db)
+
+    # ── Price query branch (BEFORE regular RAG) ──
+    price_response = _handle_price_query(query, db, history)
+    if price_response is not None:
+        price_response.session_id = session.session_id
+        assistant_msg = ChatMessage(
+            session_id=session.session_id,
+            role="assistant",
+            content=price_response.reply,
+        )
+        db.add(assistant_msg)
+        db.commit()
+        price_response.message_id = str(assistant_msg.id)
+        return price_response
 
     if len(query.split()) > 10:
         enriched_query = query
