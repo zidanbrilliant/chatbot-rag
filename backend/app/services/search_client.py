@@ -1,6 +1,4 @@
-"""Web Search Provider abstraction — supports DuckDuckGo (free) and Tavily.
-
-Switch via env SEARCH_PROVIDER=duckduckgo|tavily. Default: duckduckgo.
+"""Web Search Provider abstraction — DuckDuckGo (free).
 """
 
 from __future__ import annotations
@@ -90,47 +88,6 @@ class DuckDuckGoProvider(SearchProvider):
 
         return results
 
-
-class TavilyProvider(SearchProvider):
-    """Web search via Tavily API. Designed for AI/LLM use cases."""
-
-    def __init__(self, api_key: str, timeout: int = 10):
-        self.api_key = api_key
-        self.timeout = timeout
-
-    def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
-        if not self.api_key:
-            logger.error("TAVILY_API_KEY not configured")
-            return []
-
-        try:
-            from tavily import TavilyClient
-        except ImportError:
-            logger.error("tavily-python package not installed")
-            return []
-
-        results: list[SearchResult] = []
-        try:
-            client = TavilyClient(api_key=self.api_key)
-            response = client.search(query, max_results=max_results)
-
-            for i, hit in enumerate(response.get("results", [])):
-                results.append(
-                    SearchResult(
-                        title=hit.get("title", ""),
-                        url=hit.get("url", ""),
-                        snippet=hit.get("content", ""),
-                        score=hit.get("score", 1.0 - (i * 0.1)),
-                        source_type="external",
-                    )
-                )
-            logger.info("Tavily: %d results for '%s'", len(results), query[:60])
-        except Exception as e:
-            logger.warning("Tavily search failed: %s", str(e)[:120])
-
-        return results
-
-
 _provider: SearchProvider | None = None
 
 
@@ -140,19 +97,10 @@ def get_search_provider() -> SearchProvider:
     if _provider is not None:
         return _provider
 
-    from app.config import SEARCH_PROVIDER, SEARCH_TIMEOUT, TAVILY_API_KEY
+    from app.config import SEARCH_TIMEOUT
 
-    name = SEARCH_PROVIDER.lower()
-    if name == "tavily":
-        if not TAVILY_API_KEY:
-            logger.warning("SEARCH_PROVIDER=tavily but TAVILY_API_KEY empty — falling back to DuckDuckGo")
-            _provider = DuckDuckGoProvider(timeout=SEARCH_TIMEOUT)
-        else:
-            _provider = TavilyProvider(api_key=TAVILY_API_KEY, timeout=SEARCH_TIMEOUT)
-            logger.info("Search provider: Tavily")
-    else:
-        _provider = DuckDuckGoProvider(timeout=SEARCH_TIMEOUT)
-        logger.info("Search provider: DuckDuckGo (free, no API key)")
+    _provider = DuckDuckGoProvider(timeout=SEARCH_TIMEOUT)
+    logger.info("Search provider: DuckDuckGo (free, no API key)")
 
     return _provider
 

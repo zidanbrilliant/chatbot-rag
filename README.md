@@ -567,7 +567,7 @@ Response:
 | `TOP_K` | `5` | Max chunks ke LLM context |
 | **Web Search** | | |
 | `ENABLE_WEB_SEARCH` | `true` | Aktifkan hybrid search |
-| `SEARCH_PROVIDER` | `duckduckgo` | `duckduckgo` \| `tavily` |
+| `SEARCH_PROVIDER` | `duckduckgo` | `duckduckgo` |
 | `SEARCH_MAX_RESULTS` | `5` | Max hasil web per query |
 | `SEARCH_CACHE_TTL` | `3600` | Cache web results (detik) |
 | `TAVILY_API_KEY` | — | API key jika pakai Tavily |
