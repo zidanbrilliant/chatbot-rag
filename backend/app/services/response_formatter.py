@@ -34,12 +34,15 @@ class SourceCitation:
 
     source_id: int
     label: str
-    source_type: str  # "internal" | "external"
+    source_type: str  # "internal" | "external" | "marketplace"
     url: str | None = None
     snippet: str | None = None
     price: str | None = None
     field_type: str = ""
     price_date: str | None = None
+    marketplace: str | None = None  # e.g. "tokopedia", "shopee" if source_type=marketplace
+    is_stale: bool = False
+    age_days: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,6 +54,9 @@ class SourceCitation:
             "price": self.price,
             "field_type": self.field_type,
             "price_date": self.price_date,
+            "marketplace": self.marketplace,
+            "is_stale": self.is_stale,
+            "age_days": self.age_days,
         }
 
 
@@ -61,6 +67,7 @@ class NLResponse:
     sources: list[SourceCitation] = field(default_factory=list)
     internal_results: list[PriceResult] = field(default_factory=list)
     web_results: list[dict] = field(default_factory=list)
+    market_prices: list = field(default_factory=list)  # MarketPrice objects
     field_label: str = ""
     field_type: str = ""
     query_summary: str = ""
@@ -71,13 +78,20 @@ def build_nl_response(
     internal_results: list[PriceResult],
     web_results: list[dict],
     intent: PriceIntent,
+    market_prices: list | None = None,
 ) -> NLResponse:
     """Build NL response with citation registry (no markdown table)."""
     sources: list[SourceCitation] = []
     next_id = 1
 
     # 1. Internal sources (database products + file imports)
-    for r in internal_results:
+    is_low = intent.field_type == "low"
+    internal_sorted = sorted(
+        internal_results,
+        key=lambda r: (r.price, r.relevance_score) if r.price else (0, 0),
+    ) if is_low else internal_results
+
+    for r in internal_sorted:
         sources.append(SourceCitation(
             source_id=next_id,
             label=_format_internal_label(r),
@@ -86,11 +100,40 @@ def build_nl_response(
             price=f"{r.currency} {float(r.price):,.0f}" if r.price else None,
             field_type=r.field_type or intent.field_type,
             price_date=r.price_date.isoformat() if r.price_date else None,
+            is_stale=getattr(r, "is_stale", False),
+            age_days=getattr(r, "age_days", None),
         ))
         next_id += 1
 
-    # 2. Web sources (after strict filter)
-    for w in web_results:
+    # 2. Marketplace sources (from cached/live scrape)
+    market_prices = market_prices or []
+    for mp in market_prices:
+        label = f"{get_marketplace_label(mp.marketplace)} — {mp.url[:60] if mp.url else mp.marketplace}"
+        cached_tag = " (cached)" if mp.is_cached else ""
+        sources.append(SourceCitation(
+            source_id=next_id,
+            label=label,
+            source_type="marketplace",
+            url=mp.url,
+            snippet=(mp.snippet_excerpt or "")[:200],
+            price=f"{mp.currency} {float(mp.price):,.0f}" if mp.price else None,
+            field_type="latest",
+            price_date=mp.scraped_at.date().isoformat() if mp.scraped_at else None,
+            marketplace=mp.marketplace,
+        ))
+        next_id += 1
+
+    # 3. Web sources (after strict filter)
+    web_sorted = sorted(
+        web_results,
+        key=lambda w: (
+            w.get("best_price").value
+            if w.get("best_price") and hasattr(w.get("best_price"), "value")
+            else float("inf")
+        ),
+    ) if is_low else web_results
+
+    for w in web_sorted:
         best = w.get("best_price")
         sources.append(SourceCitation(
             source_id=next_id,
@@ -111,6 +154,7 @@ def build_nl_response(
         sources=sources,
         internal_results=internal_results,
         web_results=web_results,
+        market_prices=market_prices,
         field_label=intent.field_label(),
         field_type=intent.field_type,
         query_summary=_build_query_summary(intent),
@@ -124,6 +168,7 @@ def build_nl_response(
             "category": intent.category,
             "field_type": intent.field_type,
             "field_label": intent.field_label(),
+            "has_recent_marker": intent.has_recent_marker,
         },
     )
 
@@ -142,7 +187,14 @@ def build_llm_context(nl: NLResponse, intent: PriceIntent) -> str:
         marker = f"[{src.source_id}]"
         price_info = f" — {src.price}" if src.price else ""
         date_info = f" ({src.price_date})" if src.price_date else ""
-        type_label = "DATABASE INTERNAL" if src.source_type == "internal" else "WEB"
+        if src.source_type == "marketplace":
+            type_label = f"MARKETPLACE ({src.marketplace or 'web'})"
+        elif src.source_type == "internal":
+            type_label = "DATABASE INTERNAL"
+            if src.is_stale:
+                type_label += f" [STALE: {src.age_days}d]"
+        else:
+            type_label = "WEB"
         parts.append(
             f"{marker} {type_label}: {src.label}{price_info}{date_info}"
         )
@@ -150,6 +202,30 @@ def build_llm_context(nl: NLResponse, intent: PriceIntent) -> str:
             parts.append(f"    Snippet: {src.snippet[:150]}")
         if src.url:
             parts.append(f"    URL: {src.url}")
+        parts.append("")
+
+    # Comparison block (NEW): helps the LLM structure its answer
+    if nl.market_prices or nl.internal_results:
+        parts.append("=" * 50)
+        parts.append("PERBANDINGAN HARGA (DB vs PASARAN):")
+        parts.append("")
+        # Find the cheapest internal result and the cheapest market result
+        if nl.internal_results:
+            valid_internal = [r for r in nl.internal_results if r.price]
+            if valid_internal:
+                cheapest = min(valid_internal, key=lambda r: r.price)
+                stale_tag = " [STALE]" if getattr(cheapest, "is_stale", False) else ""
+                parts.append(
+                    f"  Database: {cheapest.currency} {float(cheapest.price):,.0f} "
+                    f"— {cheapest.product_name}{stale_tag}"
+                )
+        if nl.market_prices:
+            for mp in nl.market_prices[:3]:
+                cached_tag = " (cached)" if mp.is_cached else ""
+                parts.append(
+                    f"  {get_marketplace_label(mp.marketplace)}: "
+                    f"{mp.currency} {float(mp.price):,.0f}{cached_tag}"
+                )
         parts.append("")
 
     parts.append("=" * 50)
@@ -172,16 +248,21 @@ PRICE_NL_SYSTEM_PROMPT = """\
 Anda adalah asisten yang membantu menjawab pertanyaan tentang HARGA dalam Bahasa Indonesia.
 
 ATURAN KETAT:
-1. Anda HARUS menjawab dalam Bahasa Indonesia natural language (BUKAN markdown table, BUKAN bullet list dengan format teknis).
+1. Anda HARUS menjawab dalam Bahasa Indonesia natural language (BUKAN markdown table, BUKAN bullet list panjang).
 2. Setiap angka yang Anda sebut WAJIB disertai sitasi [1], [2], [3] yang sesuai dengan CONTEXT.
 3. DILARANG KERAS mengarang angka. Gunakan HANYA angka yang ada di CONTEXT.
 4. Jika data yang diminta TIDAK ADA di CONTEXT, jawab dengan tegas: "Maaf, informasi tidak ditemukan dalam data internal maupun sumber online."
-5. Jika ada data database DAN data web, WAJIB bandingkan secara eksplisit (contoh: "Database menunjukkan Rp X, sementara Tokopedia menjual Rp Y").
+5. Berikan jawaban DALAM SATU KALIMAT PENDEK yang menyoroti harga TERMURUR dari seluruh CONTEXT. JANGAN mendaftar semua sumber.
 6. Akhiri jawaban dengan disclaimer singkat: "Harga dapat berubah sewaktu-waktu. Selalu verifikasi ke sumber resmi."
 7. JANGAN menyebut "CONTEXT", "CHUNK", atau terminologi teknis internal.
 8. JANGAN membuat asumsi atau menggunakan pengetahuan eksternal untuk angka.
 9. Format tanggal: "10 Jan 2025" (Indonesia).
 10. Format harga: "Rp 1.500.000" (lengkap, tanpa singkatan).
+11. Pola jawaban yang ideal: "Termurah: [marketplace/internal] Rp X untuk [produk] [N]. Database internal: Rp Y [M]. Selisih: Rp Z lebih murah di [sumber]."
+12. Jika CONTEXT memiliki blok "PERBANDINGAN HARGA", gunakan headline dari blok tersebut.
+13. Jika ada hasil marketplace, WAJIB sebutkan nama marketplace (Tokopedia/Shopee/dll) dan URL di [N].
+14. JANGAN menampilkan lebih dari 2-3 sumber dalam jawaban. Cukup yang paling relevan.
+15. Jika data internal ditandai sebagai "data lama" (>30 hari), sebutkan secara singkat bahwa data tersebut sudah tua dan andalkan harga marketplace yang lebih baru.
 """
 
 
@@ -204,6 +285,7 @@ def build_fallback_nl(nl: NLResponse, intent: PriceIntent) -> str:
 
     # Group by source_type
     internal = [s for s in nl.sources if s.source_type == "internal"]
+    marketplace = [s for s in nl.sources if s.source_type == "marketplace"]
     external = [s for s in nl.sources if s.source_type == "external"]
 
     if internal:
@@ -212,7 +294,19 @@ def build_fallback_nl(nl: NLResponse, intent: PriceIntent) -> str:
         for s in internal:
             field = f" ({_field_label_id(s.field_type)})" if s.field_type else ""
             date = f" per {s.price_date}" if s.price_date else ""
-            parts.append(f"  - {s.label}{field}: {s.price}{date} [{s.source_id}]")
+            stale = " (data lama)" if getattr(s, "is_stale", False) else ""
+            parts.append(
+                f"  - {s.label}{field}: {s.price}{date}{stale} [{s.source_id}]"
+            )
+
+    if marketplace:
+        parts.append("")
+        parts.append("Harga pasaran (marketplace):")
+        for s in marketplace:
+            cached = ""
+            parts.append(
+                f"  - {s.label}: {s.price} [{s.source_id}]"
+            )
 
     if external:
         parts.append("")
@@ -220,9 +314,12 @@ def build_fallback_nl(nl: NLResponse, intent: PriceIntent) -> str:
         for s in external:
             parts.append(f"  - {s.label}: {s.price} [{s.source_id}]")
 
-    if internal and external:
+    if internal and (marketplace or external):
         parts.append("")
-        parts.append("Perbandingan: data internal menunjukkan harga yang umumnya lebih rendah dari beberapa sumber online.")
+        parts.append(
+            "Perbandingan: data internal menunjukkan harga dari knowledge base, "
+            "sedangkan data marketplace adalah harga saat ini di pasaran."
+        )
 
     parts.append("")
     parts.append("_Catatan: Harga dapat berubah sewaktu-waktu. Selalu verifikasi ke sumber resmi._")
@@ -230,6 +327,20 @@ def build_fallback_nl(nl: NLResponse, intent: PriceIntent) -> str:
 
 
 # ── Helpers ────────────────────────────────────────────
+
+
+def get_marketplace_label(marketplace: str) -> str:
+    """Human-readable Indonesian label for a marketplace ID."""
+    labels = {
+        "tokopedia": "Tokopedia",
+        "shopee": "Shopee",
+        "lazada": "Lazada",
+        "bukalapak": "Bukalapak",
+        "bhinneka": "Bhinneka",
+        "blibli": "Blibli",
+        "brand_store": "Official Store",
+    }
+    return labels.get(marketplace, marketplace.title())
 
 
 def _format_internal_label(r: PriceResult) -> str:

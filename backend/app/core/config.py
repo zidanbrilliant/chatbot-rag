@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     search_max_results: int = Field(5)
     search_timeout: int = Field(10)
     search_cache_ttl: int = Field(3600)
+    tavily_api_key: str = Field("", description="Tavily Search API key (optional fallback)")
 
     # ── CORS ─────────────────────────────────────────────
     cors_origins: str = Field("http://localhost:3000,http://localhost:5173")
@@ -162,4 +163,5 @@ SEARCH_PROVIDER = _settings.search_provider
 SEARCH_MAX_RESULTS = _settings.search_max_results
 SEARCH_TIMEOUT = _settings.search_timeout
 SEARCH_CACHE_TTL = _settings.search_cache_ttl
+TAVILY_API_KEY = _settings.tavily_api_key
 

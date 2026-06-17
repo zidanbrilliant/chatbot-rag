@@ -210,3 +210,169 @@ def test_source_to_dict():
     assert "type" in src_dict
     assert "price" in src_dict
     assert src_dict["price_date"] == "2025-01-10"
+
+
+# ── Marketplace sources (NEW) ──────────────────────────
+
+
+def test_build_nl_response_with_market_prices():
+    from app.services.marketplace_scraper import MarketPrice
+    from datetime import datetime
+
+    intent = PriceIntent(
+        is_price_query=True, query_type="catalog", target="Polytron PAS 8C28"
+    )
+    internal = [
+        PriceResult(
+            product_name="Polytron PAS 8C28",
+            price=Decimal("2500000"),
+            currency="IDR",
+            source="postgres",
+            source_detail="SKU-001",
+            price_date=date(2025, 1, 10),
+        ),
+    ]
+    market = [
+        MarketPrice(
+            marketplace="tokopedia",
+            price=Decimal("2150000"),
+            currency="IDR",
+            url="https://tokopedia.com/x",
+            snippet_excerpt="Polytron PAS 8C28 Rp 2.150.000",
+            scraped_at=datetime.utcnow(),
+            is_cached=False,
+        ),
+        MarketPrice(
+            marketplace="shopee",
+            price=Decimal("2200000"),
+            currency="IDR",
+            url="https://shopee.co.id/y",
+            snippet_excerpt="Polytron PAS 8C28 Rp 2.200.000",
+            scraped_at=datetime.utcnow(),
+            is_cached=True,
+        ),
+    ]
+    nl = build_nl_response(internal, [], intent, market_prices=market)
+    # Source IDs: 1=internal, 2=tokopedia, 3=shopee
+    assert len(nl.sources) == 3
+    assert nl.sources[0].source_type == "internal"
+    assert nl.sources[1].source_type == "marketplace"
+    assert nl.sources[1].marketplace == "tokopedia"
+    assert nl.sources[2].source_type == "marketplace"
+    assert nl.sources[2].marketplace == "shopee"
+    # market_prices field propagated
+    assert len(nl.market_prices) == 2
+
+
+def test_llm_context_includes_comparison_block():
+    from app.services.marketplace_scraper import MarketPrice
+    from datetime import datetime
+
+    intent = PriceIntent(
+        is_price_query=True, query_type="catalog", target="Polytron PAS 8C28"
+    )
+    internal = [
+        PriceResult(
+            product_name="Polytron PAS 8C28",
+            price=Decimal("2500000"),
+            currency="IDR",
+            source="postgres",
+            source_detail="SKU-001",
+            price_date=date(2025, 1, 10),
+        ),
+    ]
+    market = [
+        MarketPrice(
+            marketplace="tokopedia",
+            price=Decimal("2150000"),
+            currency="IDR",
+            url="https://tokopedia.com/x",
+            snippet_excerpt="",
+            scraped_at=datetime.utcnow(),
+        ),
+    ]
+    nl = build_nl_response(internal, [], intent, market_prices=market)
+    ctx = build_llm_context(nl, intent)
+    assert "PERBANDINGAN HARGA" in ctx
+    assert "Database" in ctx
+    assert "Tokopedia" in ctx
+
+
+def test_llm_context_marks_stale_internal():
+    from datetime import date, timedelta
+    from app.services.response_formatter import build_nl_response, build_llm_context
+    intent = PriceIntent(
+        is_price_query=True, query_type="catalog", target="X"
+    )
+    internal = [
+        PriceResult(
+            product_name="X",
+            price=Decimal("100"),
+            currency="IDR",
+            source="postgres",
+            source_detail="SKU-1",
+            price_date=date.today() - timedelta(days=45),
+            is_stale=True,
+            age_days=45,
+        ),
+    ]
+    nl = build_nl_response(internal, [], intent)
+    assert nl.sources[0].is_stale is True
+    assert nl.sources[0].age_days == 45
+    ctx = build_llm_context(nl, intent)
+    assert "STALE" in ctx or "STALE" in ctx.upper()
+
+
+def test_price_prompt_has_comparison_rules():
+    from app.services.response_formatter import PRICE_NL_SYSTEM_PROMPT
+    assert "PERBANDINGAN" in PRICE_NL_SYSTEM_PROMPT
+    # Marketplace reference
+    assert "marketplace" in PRICE_NL_SYSTEM_PROMPT.lower()
+    # Internal DB / stale data / age / days — any reference to data freshness
+    prompt_lower = PRICE_NL_SYSTEM_PROMPT.lower()
+    assert any(
+        kw in prompt_lower
+        for kw in ["stale", "lama", "hari lalu", "diupload", "diperbarui"]
+    ), "Prompt should mention data freshness/stale concept"
+
+
+def test_price_prompt_has_single_sentence_rule():
+    """NEW: The prompt should encourage single-sentence focused answers."""
+    from app.services.response_formatter import PRICE_NL_SYSTEM_PROMPT
+    assert "SATU KALIMAT" in PRICE_NL_SYSTEM_PROMPT or "satu kalimat" in PRICE_NL_SYSTEM_PROMPT
+    # Should also explicitly limit to 2-3 sources
+    assert "2-3 sumber" in PRICE_NL_SYSTEM_PROMPT or "2-3" in PRICE_NL_SYSTEM_PROMPT
+
+
+def test_fallback_nl_includes_marketplace():
+    from app.services.marketplace_scraper import MarketPrice
+    from datetime import datetime
+
+    intent = PriceIntent(
+        is_price_query=True, query_type="catalog", target="Polytron PAS 8C28"
+    )
+    internal = [
+        PriceResult(
+            product_name="Polytron PAS 8C28",
+            price=Decimal("2500000"),
+            currency="IDR",
+            source="postgres",
+            source_detail="SKU-001",
+            price_date=date(2025, 1, 10),
+        ),
+    ]
+    market = [
+        MarketPrice(
+            marketplace="tokopedia",
+            price=Decimal("2150000"),
+            currency="IDR",
+            url="https://tokopedia.com/x",
+            snippet_excerpt="",
+            scraped_at=datetime.utcnow(),
+        ),
+    ]
+    nl = build_nl_response(internal, [], intent, market_prices=market)
+    fallback = build_fallback_nl(nl, intent)
+    assert "marketplace" in fallback.lower() or "pasaran" in fallback.lower()
+    assert "Tokopedia" in fallback
+    assert "2,500,000" in fallback or "IDR 2,500,000" in fallback

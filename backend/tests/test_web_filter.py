@@ -4,8 +4,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.intent_classifier import PriceIntent
-from app.services.price_parser import extract_prices_from_snippet
-from app.services.web_filter import filter_web_by_context, relax_filter
+from app.services.price_parser import ExtractedPrice, extract_prices_from_snippet
+from app.services.web_filter import filter_web_by_context, pick_cheapest_web_results, relax_filter
 
 
 def test_strict_filter_drops_no_field_match():
@@ -123,3 +123,80 @@ def test_web_results_enriched_with_context_prices():
     assert "context_prices" in filtered[0]
     assert "best_price" in filtered[0]
     assert filtered[0]["best_price"].field_type == "high"
+
+
+# ── Cheapest web results picker (NEW) ──────────────────
+
+
+def test_pick_cheapest_returns_top_n():
+    intent = PriceIntent(
+        is_price_query=True, query_type="catalog", target="Bitcoin",
+        field_type="low",
+    )
+    web = [
+        {
+            "title": "Expensive",
+            "url": "https://x.com",
+            "snippet": "Bitcoin $100,000",
+            "best_price": ExtractedPrice(100000, "USD", "$100,000", 0.9),
+        },
+        {
+            "title": "Cheap",
+            "url": "https://y.com",
+            "snippet": "Bitcoin $30,000 lowest",
+            "best_price": ExtractedPrice(30000, "USD", "$30,000", 0.9),
+        },
+        {
+            "title": "Mid",
+            "url": "https://z.com",
+            "snippet": "Bitcoin $50,000",
+            "best_price": ExtractedPrice(50000, "USD", "$50,000", 0.8),
+        },
+    ]
+    result = pick_cheapest_web_results(web, intent, top_n=2)
+    assert len(result) == 2
+    assert result[0]["best_price"].value == 30000
+    assert result[1]["best_price"].value == 50000
+
+
+def test_pick_cheapest_when_field_not_low():
+    intent = PriceIntent(
+        is_price_query=True, query_type="catalog", target="Bitcoin",
+        field_type="latest",
+    )
+    web = [
+        {
+            "title": "A",
+            "url": "https://x.com",
+            "snippet": "Bitcoin $100,000",
+            "best_price": ExtractedPrice(100000, "USD", "$100,000", 0.9),
+        },
+        {
+            "title": "B",
+            "url": "https://y.com",
+            "snippet": "Bitcoin $30,000",
+            "best_price": ExtractedPrice(30000, "USD", "$30,000", 0.9),
+        },
+    ]
+    result = pick_cheapest_web_results(web, intent)
+    assert len(result) == 2
+
+
+def test_pick_cheapest_empty():
+    intent = PriceIntent(
+        is_price_query=True, query_type="catalog", target="Bitcoin",
+        field_type="low",
+    )
+    assert pick_cheapest_web_results([], intent) == []
+
+
+def test_pick_cheapest_missing_best_price():
+    intent = PriceIntent(
+        is_price_query=True, query_type="catalog", target="Bitcoin",
+        field_type="low",
+    )
+    web = [
+        {"title": "No price", "url": "https://x.com", "snippet": "no numbers"},
+    ]
+    result = pick_cheapest_web_results(web, intent)
+    assert result == []

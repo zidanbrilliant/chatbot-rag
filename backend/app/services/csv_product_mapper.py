@@ -65,7 +65,7 @@ def parse_product_csv(file_path: str) -> list[CSVProduct]:
         )
 
     products: list[CSVProduct] = []
-    for _, row in df.iterrows():
+    for idx, (_, row) in enumerate(df.iterrows(), start=1):
         try:
             name_raw = str(row[name_col]).strip() if name_col else ""
             if not name_raw:
@@ -85,7 +85,7 @@ def parse_product_csv(file_path: str) -> list[CSVProduct]:
 
             full_name = " ".join(filter(None, [name_raw, brand, tipe]))
             full_name = _normalize_name(full_name)
-            sku = _generate_sku(brand, tipe, name_raw)
+            sku = _generate_sku(brand, tipe, name_raw, row_idx=idx)
             category = _detect_category(name_raw)
 
             products.append(CSVProduct(
@@ -218,7 +218,7 @@ def _parse_price(s: str) -> Decimal | None:
         return None
 
 
-def _generate_sku(brand: str, tipe: str, name: str) -> str:
+def _generate_sku(brand: str, tipe: str, name: str, row_idx: int | None = None) -> str:
     parts: list[str] = []
     if brand:
         parts.append(re.sub(r"[^A-Z0-9]", "", brand.upper())[:8])
@@ -226,6 +226,8 @@ def _generate_sku(brand: str, tipe: str, name: str) -> str:
         parts.append(re.sub(r"[^A-Z0-9]", "", tipe.upper())[:12])
     if not parts:
         parts.append(re.sub(r"[^A-Z0-9]", "", name.upper())[:12])
+    if row_idx is not None:
+        parts.append(f"R{row_idx:03d}")
     sku = "-".join(parts)
     return sku or "UNKNOWN"
 
@@ -255,6 +257,8 @@ TYPO_FIXES = [
     (re.compile(r"\bSPEAKAR\b", re.IGNORECASE), "SPEAKER"),
     (re.compile(r"\bSPEAPER\b", re.IGNORECASE), "SPEAKER"),
     (re.compile(r"\bSPEAKR\b", re.IGNORECASE), "SPEAKER"),
+    (re.compile(r"\bAIR\s+COOLEER\b", re.IGNORECASE), "AIR COOLER"),
+    (re.compile(r"\bFREEEZER\b", re.IGNORECASE), "FREEZER"),
 ]
 
 

@@ -88,12 +88,16 @@ def _ingest_csv_as_products(file_path: str, db) -> int:
     inserted = 0
     for p in products:
         existing = db.query(Product).filter(Product.sku == p.sku).first()
+        new_attributes = {
+            "tipe": p.tipe,
+            "brand": p.brand,
+            "source_file": Path(file_path).name,
+        }
         if existing:
             existing.name = p.name
-            existing.brand = p.brand or existing.brand
             existing.category = p.category
             existing.unit = "unit"
-            existing.attributes = {"tipe": p.tipe, "source_file": Path(file_path).name}
+            existing.attributes = {**(existing.attributes or {}), **new_attributes}
             existing.source = "csv"
         else:
             product = Product(
@@ -101,7 +105,7 @@ def _ingest_csv_as_products(file_path: str, db) -> int:
                 name=p.name,
                 category=p.category,
                 unit="unit",
-                attributes={"tipe": p.tipe, "source_file": Path(file_path).name},
+                attributes=new_attributes,
                 source="csv",
             )
             db.add(product)

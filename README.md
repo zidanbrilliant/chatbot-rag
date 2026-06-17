@@ -533,7 +533,7 @@ Response:
 ```json
 {
   "session_id": "uuid",
-  "reply": "Bitcoin adalah sistem uang elektronik peer-to-peer...",
+  "reply": "Termurah: Tokopedia Rp 2.150.000 untuk Polytron PAS 8C28 [3]. Database internal: Rp 2.500.000 [2]. Selisih: Rp 350.000 lebih murah di Tokopedia.",
   "message_id": "uuid",
   "sources": [
     {"file_name": "bitcoin.pdf", "source_type": "internal"},
@@ -541,7 +541,16 @@ Response:
   ],
   "confidence": "high",
   "fallback_triggered": false,
-  "out_of_context": false
+  "out_of_context": false,
+  "metadata": {
+    "nl_sources": [
+      {"id": 1, "label": "Database ...", "price": "IDR 2,500,000", "type": "internal", "is_stale": false, "age_days": 0},
+      {"id": 2, "label": "Tokopedia ...", "price": "IDR 2,150,000", "type": "marketplace", "marketplace": "tokopedia"}
+    ],
+    "market_prices": [
+      {"marketplace": "tokopedia", "price": 2150000.0, "currency": "IDR", "url": "https://tokopedia.com/...", "is_cached": true}
+    ]
+  }
 }
 ```
 
@@ -571,6 +580,9 @@ Response:
 | `SEARCH_MAX_RESULTS` | `5` | Max hasil web per query |
 | `SEARCH_CACHE_TTL` | `3600` | Cache web results (detik) |
 | `TAVILY_API_KEY` | — | API key jika pakai Tavily |
+| **Marketplace** | | |
+| `MARKETPLACE_CACHE_TTL_HOURS` | `24` | Cache durasi marketplace scrape (jam) |
+| `ENABLE_MARKETPLACE_SEARCH` | `true` | Aktifkan pencarian marketplace paralel |
 | **Security** | | |
 | `ENABLE_EXTERNAL_FALLBACK` | `false` | (deprecated) Google CSE |
 | `JWT_SECRET_KEY` | `change_me` | Untuk auth (belum aktif) |
@@ -591,6 +603,12 @@ Response:
 | **CSV catalog skip embedding** | CSV Barang/Brand/Tipe/Harga di-parse langsung ke tabel `products` (SQL ILIKE cukup untuk retrieval). Hemat 175×N chunks dan tidak butuh Ollama untuk catalog ingestion. |
 | **PII redaction sebelum web search** | Query di-redact (NIK, email, phone) sebelum dikirim ke DuckDuckGo. |
 | **Audit log untuk web search** | Setiap web search call tercatat di tabel `audit_logs` (query, provider, latency, results_count). |
+| **Marketplace scraper (DDG site:)** | Cari harga pasaran via `site:tokopedia.com "produk" harga` — cached 24j di `market_price_snapshots`. Tidak scrape halaman langsung (ToS aman). 7 marketplace: Tokopedia, Shopee, Lazada, Bukalapak, Bhinneka, Blibli, Official Store. |
+| **Strict product matching** | Web result hanya disimpan jika snippet mengandung nomor model (e.g. "PAS 8C28"). Drop hasil generik. |
+| **Smart result selection** | Hanya tampilkan 2-4 sumber terbaik (termurah + terbaru). Stale data >30hari demo ke bawah dengan peringatan. |
+| **Freshness badge** | Setiap source card menampilkan 🕐 hari ini / 🕐 X hari lalu. Stale data dapat border kuning. |
+| **Single-sentence LLM answer** | LLM di-prompt untuk menjawab SATU KALIMAT menyoroti harga termurah + selisih. |
+| **Collapsible source cards** | Frontend show max 3 sumber, sisanya di "Lihat N lainnya" expander. |
 
 ---
 
@@ -613,7 +631,27 @@ python -m app.scripts.cleanup_failed_documents           # list only
 python -m app.scripts.cleanup_failed_documents --all --dry-run   # preview
 python -m app.scripts.cleanup_failed_documents --all --yes       # apply
 
+# Reset seluruh knowledge base (dari folder backend/)
+python -m app.scripts.reset_knowledge                    # list only
+python -m app.scripts.reset_knowledge --dry-run           # preview
+python -m app.scripts.reset_knowledge --yes               # execute
+
+# Hapus cache marketplace (dari folder backend/)
+python -m app.scripts.cleanup_market_snapshots            # list only
+python -m app.scripts.cleanup_market_snapshots --yes      # execute
+
 # Debug
 docker compose exec backend python -c "from app.config import SIMILARITY_THRESHOLD; print(SIMILARITY_THRESHOLD)"
 docker compose exec backend python -c "from app.services.search_client import search_web; r=search_web('test'); print(len(r), 'results')"
+
+# Knowledge base reset (dari folder backend/)
+docker compose exec backend python -m app.scripts.reset_knowledge --dry-run
+docker compose exec backend python -m app.scripts.reset_knowledge --yes
+
+# Marketplace cache cleanup (dari folder backend/)
+docker compose exec backend python -m app.scripts.cleanup_market_snapshots --dry-run --older-than 7
+docker compose exec backend python -m app.scripts.cleanup_market_snapshots --yes --older-than 7
+
+# Marketplace debug
+docker compose exec backend python -c "from app.services.marketplace_scraper import MarketplaceScraper; from app.database import SessionLocal; s=MarketplaceScraper(SessionLocal()); r=s.search_all('Polytron PAS 8C28'); [print(m.marketplace, m.price, 'cached' if m.is_cached else 'fresh') for m in r]"
 ```

@@ -125,6 +125,7 @@ export default function Chat() {
                 <PriceCitations
                   sources={m.metadata.nl_sources}
                   intent={m.metadata.intent}
+                  marketPrices={m.metadata.market_prices || []}
                 />
               )}
               {m.sources && m.sources.length > 0 && !m._streaming && !m.metadata?.nl_sources && (

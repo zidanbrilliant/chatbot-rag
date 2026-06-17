@@ -35,6 +35,7 @@ class PriceIntent:
     max_price: float | None = None
     category: str | None = None
     aggregation: str = ""           # "max" | "min" | "avg"
+    has_recent_marker: bool = False # "hari ini" / "saat ini" / "sekarang" with "low" field
     attributes: dict[str, Any] | None = None
     confidence: float = 0.0
 
@@ -93,6 +94,9 @@ FIELD_PATTERNS = {
     "low": [
         re.compile(r"\bterendah\b", re.IGNORECASE),
         re.compile(r"\bpaling\s+rendah\b", re.IGNORECASE),
+        re.compile(r"\bpaling\s+murah\b", re.IGNORECASE),
+        re.compile(r"\btermurah\b", re.IGNORECASE),
+        re.compile(r"\bmurah\s+(?:harga|nya)\b", re.IGNORECASE),
         re.compile(r"\bdip\b", re.IGNORECASE),
         re.compile(r"\blowest\b", re.IGNORECASE),
         re.compile(r"\bminimum\b", re.IGNORECASE),
@@ -198,6 +202,12 @@ def detect_price_intent(query: str) -> PriceIntent:
     unit = _extract_unit(q_lower)
     min_p, max_p = _extract_price_range(q_lower)
     aggregation = _extract_aggregation(q_lower, field_type)
+    has_recent = (
+        field_type == "low"
+        and _has_recent_marker(q_lower)
+        and target_date is None
+        and date_range is None
+    )
 
     if min_p is not None or max_p is not None:
         qtype = "multi_criteria"
@@ -221,6 +231,7 @@ def detect_price_intent(query: str) -> PriceIntent:
         max_price=max_p,
         category=category,
         aggregation=aggregation,
+        has_recent_marker=has_recent,
         attributes={"unit": unit} if unit else None,
         confidence=0.9 if target else 0.6,
     )
@@ -296,7 +307,37 @@ def _extract_target(query: str) -> str:
         r"\s+(?:berapa|brp|brapa|kasih|tolong|ya|deh)$",
         "", target, flags=re.IGNORECASE,
     ).strip()
+
+    # Strip marketplace / channel names (anywhere in target)
+    # Examples: "di Tokopedia", "di Shopee", "di Lazada", "di marketplace", "di pasaran", "di online"
+    target = _strip_marketplace_noise(target)
+
     return target
+
+
+MARKETPLACE_NOISE_PATTERNS = [
+    r"\s+(?:di|via|melalui|dari|lewat|pada|di\s+marketplace|di\s+market)\s+"
+    r"(?:tokopedia|shopee|lazada|bukalapak|bhinneka|blibli|bli-?bli|"
+    r"marketplace|market|online|pasaran|onlineshop|e-?commerce)\b",
+    r"\s+(?:di|via|melalui)\s+(?:toko\s+)?online\b",
+    r"\s+(?:yang\s+)?ada\s+di\s+(?:tokopedia|shopee|lazada|bukalapak|bhinneka|blibli)\b",
+]
+
+
+def _strip_marketplace_noise(target: str) -> str:
+    """Remove marketplace/channel references from target string.
+
+    Examples:
+        "Polytron PAS 8C28 di Tokopedia" -> "Polytron PAS 8C28"
+        "Samsung TV di Shopee dan Lazada" -> "Samsung TV"
+        "laptop di marketplace" -> "laptop"
+    """
+    if not target:
+        return target
+    out = target
+    for pat in MARKETPLACE_NOISE_PATTERNS:
+        out = re.sub(pat, "", out, flags=re.IGNORECASE).strip()
+    return out
 
 
 def _detect_field(q_lower: str) -> str:
@@ -501,3 +542,16 @@ def _extract_aggregation(q_lower: str, field_type: str) -> str:
     if field_type == "low":
         return "min"
     return ""
+
+
+RECENT_MARKER_PATTERNS = [
+    re.compile(r"\bhari\s+ini\b", re.IGNORECASE),
+    re.compile(r"\bsaat\s+ini\b", re.IGNORECASE),
+    re.compile(r"\bsekarang\b", re.IGNORECASE),
+    re.compile(r"\bminggu\s+ini\b", re.IGNORECASE),
+    re.compile(r"\b(today|now|current)\b", re.IGNORECASE),
+]
+
+
+def _has_recent_marker(q_lower: str) -> bool:
+    return any(p.search(q_lower) for p in RECENT_MARKER_PATTERNS)

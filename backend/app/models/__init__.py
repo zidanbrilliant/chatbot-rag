@@ -4,6 +4,17 @@ from .document import AccessLevel, Document, DocumentChunk, DocumentStatus
 from .evaluation import RAGEvaluationCase, RAGEvaluationRun
 from .feedback import Feedback
 from .ingestion import IngestionJob, IngestionJobStatus
+from .market_price import (
+    MARKETPLACE_BHINNEKA,
+    MARKETPLACE_BLIBLI,
+    MARKETPLACE_BRANDS,
+    MARKETPLACE_BUKALAPAK,
+    MARKETPLACE_DOMAINS,
+    MARKETPLACE_LAZADA,
+    MARKETPLACE_SHOPEE,
+    MARKETPLACE_TOKOPEDIA,
+    MarketPriceSnapshot,
+)
 from .price import PriceOHLC, Product, ProductCategory, ProductPrice
 from .user import Role, User, UserRole
 
@@ -22,7 +33,15 @@ __all__ = [
     "Feedback",
     "IngestionJob",
     "IngestionJobStatus",
-    "MessageCitation",
+    "MARKETPLACE_BHINNEKA",
+    "MARKETPLACE_BLIBLI",
+    "MARKETPLACE_BRANDS",
+    "MARKETPLACE_BUKALAPAK",
+    "MARKETPLACE_DOMAINS",
+    "MARKETPLACE_LAZADA",
+    "MARKETPLACE_SHOPEE",
+    "MARKETPLACE_TOKOPEDIA",
+    "MarketPriceSnapshot",
     "PriceOHLC",
     "Product",
     "ProductCategory",

@@ -185,3 +185,66 @@ def test_parse_csv_real_barang():
     assert p.price > 0
     assert p.sku
     assert p.category in ("speaker", "led_tv", "tv", "other")
+
+
+# ── SKU uniqueness (row-index suffix) ──────────────────
+
+
+def test_sku_unique_across_duplicate_rows():
+    """Same brand+tipe on multiple CSV rows must produce distinct SKUs."""
+    from app.services.csv_product_mapper import _generate_sku
+
+    sku1 = _generate_sku("POLYTRON", "PAS 8B28", "SPEAKER AKTIF", row_idx=4)
+    sku2 = _generate_sku("POLYTRON", "PAS 8B28", "SPEAKER AKTIF", row_idx=6)
+    assert sku1 != sku2
+    assert "R004" in sku1
+    assert "R006" in sku2
+
+
+def test_sku_no_row_idx_keeps_legacy_format():
+    """Without row_idx, SKU is brand-tipe (legacy behavior preserved)."""
+    from app.services.csv_product_mapper import _generate_sku
+
+    sku = _generate_sku("SHARP", "24 DC1I", "LED")
+    assert "R0" not in sku  # No R0xx row suffix
+    assert sku == "SHARP-24DC1I"
+
+
+# ── Typo fixes (AIR COOLEER, FREEEZER) ─────────────────
+
+
+def test_typo_fix_air_cooleer():
+    from app.services.csv_product_mapper import _normalize_name
+
+    assert _normalize_name("AIR COOLEER MIDEA") == "AIR COOLER MIDEA"
+
+
+def test_typo_fix_freeezer():
+    from app.services.csv_product_mapper import _normalize_name
+
+    assert _normalize_name("FREEEZER BOX SHARP") == "FREEZER BOX SHARP"
+
+
+def test_typo_fix_preserves_speaker_typos():
+    """Existing SPEAKAR/SPEAPER fixes still work."""
+    from app.services.csv_product_mapper import _normalize_name
+
+    assert _normalize_name("SPEAKAR AKTIF") == "SPEAKER AKTIF"
+    assert _normalize_name("SPEAPER AKTIF") == "SPEAKER AKTIF"
+
+
+# ── Real barang.csv: no duplicate SKUs anymore ──────────
+
+
+def test_barang_csv_no_duplicate_skus():
+    """All SKU values in barang.csv must be unique (after row-index fix)."""
+    real_path = Path(__file__).parent.parent.parent.parent / "data" / "barang.csv"
+    if not real_path.exists():
+        return
+
+    products = parse_product_csv(str(real_path))
+    skus = [p.sku for p in products]
+    assert len(skus) == len(set(skus)), (
+        f"Found duplicate SKUs in barang.csv: "
+        f"{[s for s in skus if skus.count(s) > 1]}"
+    )

@@ -44,7 +44,8 @@ from app.services.llm_client import (
     validate_citations,
 )
 from app.services.qdrant_client import get_qdrant, multi_source_search
-from app.services.price_service import PriceService
+from app.services.price_service import PriceService, select_top_results
+from app.services.marketplace_scraper import MarketplaceScraper, MarketPrice
 from app.services.response_formatter import (
     PRICE_NL_SYSTEM_PROMPT,
     build_fallback_nl,
@@ -57,7 +58,13 @@ from app.services.sanitizer import scan_and_redact
 from app.services.search_client import search_web
 from app.services.search_cache import get_cached_results, cache_search_results
 from app.services.audit_log import log_web_search, log_rag_query
-from app.services.web_filter import filter_web_by_context, relax_filter
+from app.services.web_filter import (
+    enrich_web_with_source_score,
+    filter_web_by_context,
+    filter_web_by_product_match,
+    pick_cheapest_web_results,
+    relax_filter,
+)
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
@@ -235,16 +242,27 @@ def _handle_price_query(
     )
 
     service = PriceService(db)
+    marketplace_scraper = MarketplaceScraper(db)
 
-    # Parallel: postgres + file scan + web search
+    # Parallel: postgres + file scan + marketplace + web search
     internal_results: list = []
     file_results: list = []
     web_results: list = []
+    market_prices: list = []
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         # Route to appropriate PriceService method based on intent
-        if intent.query_type == "timeseries" and intent.target_date:
-            if intent.field_type in ("high", "low", "open", "close"):
+        if intent.has_recent_marker:
+            f_pg = executor.submit(
+                service.get_lowest_ohlc_recent, intent.target, 30,
+            )
+        elif intent.query_type == "timeseries" and intent.target_date:
+            if intent.field_type == "low":
+                f_pg = executor.submit(
+                    service.get_lowest_by_date,
+                    intent.target, intent.target_date,
+                )
+            elif intent.field_type in ("high", "open", "close"):
                 f_pg = executor.submit(
                     service.lookup_ohlc_by_date,
                     intent.target, intent.target_date, intent.field_type,
@@ -254,6 +272,10 @@ def _handle_price_query(
                     service.lookup_by_date,
                     intent.target, intent.target_date, intent.field_type or "close",
                 )
+        elif intent.field_type == "low" and intent.query_type in ("catalog", ""):
+            f_pg = executor.submit(
+                service.get_lowest_by_name, intent.target, intent.category,
+            )
         elif intent.query_type == "range" and intent.date_range_start and intent.date_range_end:
             f_pg = executor.submit(
                 service.lookup_ohlc_by_range,
@@ -276,6 +298,10 @@ def _handle_price_query(
             )
         f_files = executor.submit(service.search_from_files, query)
         f_web = executor.submit(_search_web_with_cache, query)
+        # Marketplace scraper: searches Tokopedia/Shopee/etc. via DDG site: operator
+        f_market = executor.submit(
+            marketplace_scraper.search_all, intent.target, None,
+        )
 
         try:
             internal_results = f_pg.result(timeout=10) or []
@@ -292,8 +318,27 @@ def _handle_price_query(
         except Exception as e:
             logger.warning("PriceService web failed: %s", str(e)[:120])
             web_results = []
+        try:
+            market_prices = f_market.result(timeout=20) or []
+        except Exception as e:
+            logger.warning("Marketplace scraper failed: %s", str(e)[:120])
+            market_prices = []
 
     all_internal = internal_results + file_results
+
+    # Deprioritize stale internal results (>30 days old) — move to end of list
+    fresh_internal: list = []
+    stale_internal: list = []
+    for r in all_internal:
+        if getattr(r, "is_stale", False):
+            stale_internal.append(r)
+        else:
+            fresh_internal.append(r)
+    all_internal = fresh_internal + stale_internal
+
+    # Apply strict product match on web results (filter to same model)
+    if web_results and intent.target:
+        web_results = filter_web_by_product_match(web_results, intent.target)
 
     # Apply strict web filter based on intent context
     if web_results:
@@ -307,14 +352,44 @@ def _handle_price_query(
         except Exception as e:
             logger.warning("Web filter failed: %s", str(e)[:120])
 
-    if not all_internal and not web_results:
+    # Apply marketplace scoring & sort: marketplaces first, brand stores next
+    if web_results:
+        web_results = enrich_web_with_source_score(web_results)
+
+    # For lowest queries: pick only the cheapest web results
+    if web_results and intent.field_type == "low":
+        web_results = pick_cheapest_web_results(web_results, intent, top_n=3)
+
+    # Log marketplace hits for debugging
+    if market_prices:
+        logger.info(
+            "Marketplace: %d prices for '%s' (cheapest: %s %.0f)",
+            len(market_prices), intent.target,
+            market_prices[0].marketplace, market_prices[0].price,
+        )
+
+    if not all_internal and not web_results and not market_prices:
         return None
+
+    # Apply smart selection: keep only top results (cheapest + freshest)
+    # for focused "best deal" answer. Stale prices are demoted.
+    all_internal, market_prices = select_top_results(
+        all_internal,
+        market_prices,
+        max_internal=2,
+        max_market=2,
+    )
+
+    # Limit web results to top 2 to keep the answer focused
+    if web_results:
+        web_results = web_results[:2]
 
     # Build NL response with citation registry (NO markdown table)
     nl_resp = build_nl_response(
         internal_results=all_internal,
         web_results=web_results,
         intent=intent,
+        market_prices=market_prices,
     )
 
     if not nl_resp.sources:
@@ -387,6 +462,7 @@ def _handle_price_query(
             "nl_sources": [s.to_dict() for s in nl_resp.sources],
             "intent": nl_resp.intent,
             "query_summary": nl_resp.query_summary,
+            "market_prices": [m.to_dict() for m in market_prices],
         },
     )
 

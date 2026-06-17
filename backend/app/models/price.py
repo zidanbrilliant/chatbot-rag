@@ -87,6 +87,30 @@ class Product(Base):
                 return o
         return None
 
+    def min_price(self) -> "ProductPrice | None":
+        if not self.prices:
+            return None
+        return min(self.prices, key=lambda p: p.price)
+
+    def min_ohlc_low(self) -> Decimal | None:
+        if not self.ohlc_prices:
+            return None
+        values = [o.low for o in self.ohlc_prices if o.low is not None]
+        if not values:
+            return None
+        return min(values)
+
+    def min_ohlc_low_date(self) -> date | None:
+        if not self.ohlc_prices:
+            return None
+        best = None
+        for o in self.ohlc_prices:
+            if o.low is None:
+                continue
+            if best is None or o.low < best.low:
+                best = o
+        return best.trade_date if best else None
+
 
 class ProductPrice(Base):
     __tablename__ = "product_prices"

@@ -211,6 +211,199 @@ th { font-weight: 600; color: #555; }
   align-self: center;
 }
 
+/* Lowest price indicator */
+.lowest-badge {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  background: #c8e6c9;
+  color: #2e7d32;
+  border-radius: 4px;
+  font-weight: 700;
+  border: 1px solid #a5d6a7;
+}
+.source-card.cheapest {
+  border-left: 3px solid #2e7d32;
+  background: #e8f5e9;
+}
+.cheapest-badge {
+  font-size: 0.65rem;
+  padding: 2px 6px;
+  background: #2e7d32;
+  color: white;
+  border-radius: 4px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.cheapest-price {
+  color: #2e7d32;
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+/* Comparison card (NEW) */
+.comparison-card {
+  margin: 0 6px 8px 6px;
+  border: 1px solid #bbdefb;
+  border-left: 4px solid #1976d2;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #e3f2fd 0%, #f5fafe 100%);
+  overflow: hidden;
+}
+.comparison-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: #bbdefb;
+  font-size: 0.9rem;
+  color: #0d47a1;
+  font-weight: 700;
+}
+.comparison-icon {
+  font-size: 1rem;
+}
+.comparison-rows {
+  padding: 4px 0;
+}
+.comparison-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  text-decoration: none;
+  color: inherit;
+  border-bottom: 1px solid #e3f2fd;
+  transition: background 0.1s;
+}
+.comparison-row:last-child {
+  border-bottom: none;
+}
+.comparison-row.clickable:hover,
+.comparison-row.marketplace:hover {
+  background: #bbdefb;
+}
+.comparison-row.internal {
+  background: #f1f8e9;
+  border-left: 3px solid #2e7d32;
+  margin: 0 8px;
+  border-radius: 4px;
+}
+.comparison-row.marketplace.cheapest {
+  background: #c8e6c9;
+  border-left: 3px solid #2e7d32;
+  margin: 0 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.comp-label {
+  flex: 1;
+  color: #1a1a2e;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.comp-value {
+  font-weight: 600;
+  color: #1a1a2e;
+  font-size: 0.95rem;
+}
+.cached-tag {
+  font-size: 0.6rem;
+  padding: 1px 4px;
+  background: #fff3e0;
+  color: #e65100;
+  border-radius: 3px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.comparison-footer {
+  padding: 6px 14px;
+  background: #f5fafe;
+  border-top: 1px solid #e3f2fd;
+  text-align: center;
+  font-size: 0.85rem;
+}
+.comp-diff.cheaper {
+  color: #2e7d32;
+  font-weight: 700;
+}
+.comp-diff.expensive {
+  color: #c62828;
+  font-weight: 700;
+}
+
+/* Stale data indicator */
+.source-card.stale {
+  opacity: 0.85;
+  border-left: 3px solid #ff9800 !important;
+}
+.stale-badge {
+  font-size: 0.65rem;
+  padding: 2px 6px;
+  background: #fff3e0;
+  color: #e65100;
+  border-radius: 4px;
+  font-weight: 700;
+  border: 1px solid #ffe0b2;
+  white-space: nowrap;
+}
+
+/* Marketplace source card */
+.source-card.source-marketplace {
+  border-left: 3px solid #ff9800;
+  background: #fff8e1;
+}
+.source-badge.marketplace {
+  background: #ffe0b2;
+  color: #e65100;
+}
+
+/* Show more / less button */
+.show-more-btn {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  margin-top: 4px;
+  background: #f5f5f5;
+  border: 1px dashed #bdbdbd;
+  border-radius: 6px;
+  color: #555;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.show-more-btn:hover {
+  background: #eeeeee;
+  color: #1976d2;
+}
+
+/* Freshness badge (NEW) */
+.freshness-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.62rem;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+  white-space: nowrap;
+  margin-left: 4px;
+}
+.freshness-badge.freshness-fresh {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+.freshness-badge.freshness-medium {
+  background: #fff8e1;
+  color: #e65100;
+}
+.freshness-badge.freshness-stale {
+  background: #ffebee;
+  color: #c62828;
+}
+
 /* Legacy price table styles (kept for backward compat) */
 .price-table-wrapper {
   margin-top: 12px;
