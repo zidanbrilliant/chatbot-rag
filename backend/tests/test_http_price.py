@@ -198,12 +198,61 @@ def test_non_price_query_passthrough():
     print("  PASS (intent correctly classified as non-price)")
 
 
+def test_price_query_none_fallback():
+    """Regression: query with no DB data must NOT crash (NameError bug fix).
+
+    When PriceService returns no results, _handle_price_query returns None.
+    The general RAG path then runs and uses extract_tabular_fact,
+    evaluate_answerability, ABSTAIN_MESSAGE, format_context — all of which
+    were missing imports causing 500 on any unknown product query.
+    """
+    banner("HTTP TEST 5: POST /chat/query — unknown product (fallback RAG path)")
+    client = make_client()
+
+    with patch("app.routers.chat.detect_price_intent") as mock_detect, \
+         patch("app.routers.chat.generate_embedding") as mock_embed, \
+         patch("app.routers.chat.multi_source_search") as mock_qdrant, \
+         patch("app.routers.chat.generate_response") as mock_gen, \
+         patch("app.routers.chat._search_web_with_cache") as mock_web, \
+         patch("app.routers.chat.MarketplaceScraper.search_all") as mock_market, \
+         patch("app.routers.chat.PriceService.lookup_by_name") as mock_lookup, \
+         patch("app.routers.chat.PriceService.search_from_files") as mock_files:
+
+        from app.services.intent_classifier import PriceIntent
+        mock_detect.return_value = PriceIntent(is_price_query=False)
+
+        mock_embed.return_value = [0.1] * 1024
+        mock_qdrant.return_value = []
+        mock_gen.return_value = "Maaf, informasi tidak ditemukan."
+        mock_web.return_value = []
+        mock_market.return_value = []
+        mock_lookup.return_value = []
+        mock_files.return_value = []
+
+        resp = client.post(
+            "/api/v1/chat/query",
+            json={
+                "query": "berapa harga SHARP SJN 162 di Tokopedia saat ini",
+                "session_id": None,
+            },
+        )
+
+    print(f"  status_code: {resp.status_code}")
+    assert resp.status_code == 200, (
+        f"Expected 200, got {resp.status_code}: {resp.text[:300]}"
+    )
+    data = resp.json()
+    print(f"  reply (120c): {data.get('reply', '')[:120]!r}")
+    print("  PASS (no NameError — imports verified)")
+
+
 if __name__ == "__main__":
     tests = [
         test_price_query_beras,
         test_price_query_bitcoin_date,
         test_price_query_samsung,
         test_non_price_query_passthrough,
+        test_price_query_none_fallback,
     ]
     passed = 0
     failed = 0

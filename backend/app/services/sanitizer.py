@@ -1,6 +1,8 @@
 import logging
 import re
 
+from app.services.prompt_guard import detect_injection, strip_injection
+
 logger = logging.getLogger("chatbot")
 
 ID_CARD_PATTERN = re.compile(r"\b\d{16}\b")
@@ -42,3 +44,99 @@ def scan_and_redact(text: str) -> tuple[str, list[str]]:
         logger.info("PII detected: %s", ", ".join(findings))
         return redact_pii(text), findings
     return text, []
+
+
+# ── Prompt injection detection + stripping ──────────────
+
+
+def scan_for_injection(text: str) -> tuple[str, bool]:
+    """Scan user input for prompt injection attempts.
+    
+    Returns (cleaned_text, was_modified).
+    If injection detected, the offending parts are stripped/replaced.
+    """
+    if not text:
+        return text, False
+    
+    result = detect_injection(text)
+    cleaned = text
+    was_stripped = False
+    
+    if result.is_injection:
+        logger.warning(
+            "Prompt injection detected in input: confidence=%.2f category=%s",
+            result.confidence, result.category,
+        )
+        cleaned, was_stripped = strip_injection(text)
+    
+    return cleaned, was_stripped
+
+
+# ── Output validation ──────────────────────────────────
+
+
+OUTPUT_BLOCKED_PATTERNS = [
+    # LLM leaked meta-tokens
+    (re.compile(r"\[INST\]|\[/INST\]|\[SYS\]|\[/SYS\]"), "leaked_llama_tokens"),
+    (re.compile(r"&lt;system&gt;|&lt;sys&gt;"), "leaked_system_tags"),
+    # Creative content in a non-creative answer
+    (re.compile(r"\b(pantun|puisi|sajak|syair)\b.*\n", re.IGNORECASE), "creative_content"),
+    (re.compile(r"\bresep\s+(masakan|makanan|soto|rendang)\b.*\n", re.IGNORECASE), "creative_content"),
+    # Refusal to follow instructions (acceptable)
+    (re.compile(r"^I\s+(cannot|can't|will not|won't|refuse)\s+", re.IGNORECASE), "refusal"),
+    # Excessive markdown (shouldn't happen with strict prompt)
+    (re.compile(r"```[a-z]*\n.*?\n```", re.DOTALL), "code_block"),
+]
+
+
+def validate_output_strict(reply: str) -> tuple[str, list[str]]:
+    """Validate LLM output for prompt injection artifacts.
+    
+    Returns (cleaned_reply, violations).
+    violations = list of violation types found.
+    """
+    if not reply:
+        return reply, []
+    
+    violations = []
+    cleaned = reply
+    
+    for pattern, vtype in OUTPUT_BLOCKED_PATTERNS:
+        if pattern.search(cleaned):
+            if vtype in ("refusal",):
+                continue  # acceptable
+            violations.append(vtype)
+            cleaned = pattern.sub("[FILTERED]", cleaned)
+    
+    if violations:
+        logger.warning(
+            "Output validation: %d violations found: %s",
+            len(violations), ", ".join(violations),
+        )
+    
+    return cleaned, violations
+
+
+def sanitize_web_snippet(snippet: str) -> tuple[str, bool]:
+    """Sanitize a web snippet for prompt injection attempts.
+    
+    Returns (cleaned_snippet, was_modified).
+    """
+    if not snippet:
+        return snippet, False
+    
+    result = detect_injection(snippet)
+    if not result.is_injection:
+        return snippet, False
+    
+    cleaned, was_stripped = strip_injection(snippet)
+    
+    # If too many filters were applied, the snippet is likely unusable
+    if cleaned.count("[FILTERED]") > 3:
+        logger.info("Web snippet heavily filtered — returning generic placeholder")
+        return "[Filtered web content — suspected injection]", True
+    
+    if was_stripped:
+        logger.info("Web snippet sanitized for injection (cat=%s)", result.category)
+    
+    return cleaned, was_stripped

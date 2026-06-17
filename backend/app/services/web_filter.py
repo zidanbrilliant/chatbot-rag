@@ -11,6 +11,7 @@ from typing import Any
 
 from app.services.intent_classifier import PriceIntent
 from app.services.price_parser import ExtractedPrice, extract_prices_from_snippet
+from app.services.sanitizer import sanitize_web_snippet
 
 logger = logging.getLogger("chatbot")
 
@@ -311,4 +312,42 @@ def enrich_web_with_source_score(
             2
         )
     )
+    return web_results
+
+
+# ── Web snippet sanitization for prompt injection ───────
+
+
+def sanitize_all_web_snippets(
+    web_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Sanitize all web snippets to strip injection patterns.
+
+    Each web result's 'snippet' field is cleaned. If a snippet is
+    too heavily filtered, it's replaced with a placeholder.
+    Mutates and returns the list.
+    """
+    if not web_results:
+        return web_results
+
+    sanitized_count = 0
+    for w in web_results:
+        snippet = w.get("snippet", "")
+        if not snippet:
+            continue
+        cleaned, was_modified = sanitize_web_snippet(snippet)
+        if was_modified:
+            sanitized_count += 1
+            w["snippet"] = cleaned
+            # Also sanitize the title
+            title = w.get("title", "")
+            if title:
+                cleaned_title, _ = sanitize_web_snippet(title)
+                w["title"] = cleaned_title
+
+    if sanitized_count:
+        logger.info(
+            "Web snippet sanitization: %d/%d results modified",
+            sanitized_count, len(web_results),
+        )
     return web_results

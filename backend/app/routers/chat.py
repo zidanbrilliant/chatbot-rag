@@ -33,6 +33,7 @@ from app.services.embedding import generate_embedding
 from app.services.intent_classifier import detect_price_intent
 from app.services.llm_client import (
     expand_synonyms,
+    filter_chunks_safe,
     format_context_with_ids,
     format_hybrid_context,
     generate_response,
@@ -48,46 +49,40 @@ from app.services.price_service import PriceService, select_top_results
 from app.services.marketplace_scraper import MarketplaceScraper, MarketPrice
 from app.services.response_formatter import (
     PRICE_NL_SYSTEM_PROMPT,
+    STRICT_SYSTEM_PROMPT,
     build_fallback_nl,
     build_llm_context,
     build_nl_response,
 )
-from app.services.structured_extractor import extract_tabular_fact
-from app.services.answerability import ABSTAIN_MESSAGE, evaluate as evaluate_answerability
-from app.services.sanitizer import scan_and_redact
+from app.services.sanitizer import (
+    sanitize_web_snippet as _sanitize_snippet,
+    scan_and_redact,
+    scan_for_injection,
+    validate_output_strict,
+)
 from app.services.search_client import search_web
 from app.services.search_cache import get_cached_results, cache_search_results
+from app.services.answerability import ABSTAIN_MESSAGE, evaluate as evaluate_answerability
 from app.services.audit_log import log_web_search, log_rag_query
+from app.services.groq_client import format_context
+from app.services.structured_extractor import extract_tabular_fact
 from app.services.web_filter import (
     enrich_web_with_source_score,
     filter_web_by_context,
     filter_web_by_product_match,
     pick_cheapest_web_results,
     relax_filter,
+    sanitize_all_web_snippets,
 )
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
 logger = logging.getLogger("chatbot")
 
-SYSTEM_PROMPT = """\
-Anda adalah chatbot knowledge base yang profesional dan akurat. \
-Jawab berdasarkan informasi yang terdapat dalam CONTEXT yang diberikan di bawah. \
-CONTEXT berisi dua jenis sumber: [INTERNAL C1, C2, ...] dari dokumen perusahaan, \
-dan [EXTERNAL W1, W2, ...] dari pencarian web.
+# Import strict mode classifier for fixed casual responses
+from app.services.strict_mode import classify_query, get_casual_response as _get_casual
 
-ATURAN MUTLAK:
-1. Jawab berdasarkan informasi dari CONTEXT. Prioritaskan sumber INTERNAL jika tersedia.
-2. Gunakan [C1], [C2], dst untuk mengutip sumber INTERNAL. Gunakan [W1], [W2], dst untuk mengutip sumber EXTERNAL.
-3. Jika informasi tidak tersedia di CONTEXT, katakan bahwa informasi tidak ditemukan.
-4. JANGAN membuat asumsi, mengarang, atau menebak.
-5. Untuk data angka/tabel, KUTIP angkanya PERSIS dari CONTEXT tanpa membulatkan.
-6. Untuk pertanyaan sapaan singkat (halo, hai, assalamualaikum), jawab santai dan singkat.
-7. Gunakan Bahasa Indonesia yang profesional dan ringkas.
-8. JANGAN sebutkan kata "CONTEXT", "CHUNK", "INTERNAL", "EXTERNAL", atau "berdasarkan teks" dalam jawaban.
-9. Jawab langsung ke intinya — tidak perlu pembukaan panjang.
-10. Jika menggunakan sumber web, sebutkan bahwa informasi berasal dari sumber online.
-"""
+SYSTEM_PROMPT = STRICT_SYSTEM_PROMPT  # use strict KB-only prompt everywhere
 
 CASUAL_PATTERNS = [
     r"^(hai|halo|hi|hey|hei|assalamualaikum|selamat\s+\w+)[\s!.]*$",
@@ -95,7 +90,6 @@ CASUAL_PATTERNS = [
     r"^(tes|test|coba|testing)[\s!.]*$",
     r"^(kamu\s+siapa|siapa\s+kamu|nama\s+kamu|kamu\s+apa)[\s?!.]*$",
     r"^(terima\s+kasih|makasih|thanks|thank\s+you)[\s!.]*$",
-    r"^(bisa\s+bahasa|kamu\s+bisa\s+apa|apa\s+saja\s+yang|bantu\s+apa)[\s?!.]*$",
 ]
 
 FALLBACK_MESSAGE = (
@@ -136,14 +130,8 @@ def _sanitize(text: str) -> str:
 
 
 def _is_casual(query: str) -> bool:
-    q = query.strip().lower()
-    exact_casual = {"hai", "hi", "ya", "ok", "oke", "tes", "test", "halo"}
-    if q in exact_casual:
-        return True
-    for pattern in CASUAL_PATTERNS:
-        if re.match(pattern, q):
-            return True
-    return False
+    """Check if query is casual greeting — for fixed response routing."""
+    return _get_casual(query) is not None
 
 
 def get_or_create_session(session_id: str | None, db: Session) -> ChatSession:
@@ -471,11 +459,29 @@ def _handle_price_query(
 def chat_query(req: QueryRequest, db: Session = Depends(get_db)):
     query = _sanitize(req.query)
     query, pii_findings = scan_and_redact(query)
-    
+
+    # Layer 1: scan for prompt injection in user input
+    query, was_injected = scan_for_injection(query)
+    if was_injected:
+        logger.warning("Injection stripped from query: %s", req.query[:60])
+
     if not query:
         return QueryResponse(
             session_id=req.session_id or "",
             reply="Silakan ketik pertanyaan yang jelas ya.",
+        )
+
+    # Layer 1b: reject creative/suspicious queries outright
+    from app.services.prompt_guard import detect_injection
+    inject_result = detect_injection(query)
+    if inject_result.is_injection and inject_result.confidence >= 0.3:
+        logger.warning(
+            "Injection rejected: confidence=%.2f cat=%s query=%s",
+            inject_result.confidence, inject_result.category, req.query[:60],
+        )
+        return QueryResponse(
+            session_id=req.session_id or "",
+            reply="Maaf, saya hanya dapat membantu pertanyaan seputar informasi harga produk, perbandingan harga, dan konten dokumen di knowledge base. Silakan tanyakan hal yang lebih spesifik.",
         )
 
     session = get_or_create_session(req.session_id, db)
@@ -485,13 +491,13 @@ def chat_query(req: QueryRequest, db: Session = Depends(get_db)):
     db.add(ChatMessage(session_id=session.session_id, role="user", content=query))
     db.commit()
 
-    if _is_casual(query):
-        reply = generate_response(SYSTEM_PROMPT, "", get_history(session.session_id, db), query)
-        assistant_msg = ChatMessage(session_id=session.session_id, role="assistant", content=reply)
-        db.add(assistant_msg)
+    # Layer 2: handle casual greetings with fixed safe responses
+    casual_response = _get_casual(query)
+    if casual_response:
+        db.add(ChatMessage(session_id=session.session_id, role="assistant", content=casual_response))
         db.commit()
         return QueryResponse(
-            session_id=session.session_id, reply=reply, message_id=str(assistant_msg.id)
+            session_id=session.session_id, reply=casual_response
         )
 
     history = get_history(session.session_id, db)
@@ -499,6 +505,11 @@ def chat_query(req: QueryRequest, db: Session = Depends(get_db)):
     # ── Price query branch (BEFORE regular RAG) ──
     price_response = _handle_price_query(query, db, history)
     if price_response is not None:
+        # Layer 3: validate output for injection artifacts
+        clean_reply, violations = validate_output_strict(price_response.reply)
+        if violations:
+            price_response.reply = clean_reply
+
         price_response.session_id = session.session_id
         assistant_msg = ChatMessage(
             session_id=session.session_id,
@@ -599,6 +610,12 @@ def chat_query(req: QueryRequest, db: Session = Depends(get_db)):
         if len(chunks) > 5:
             chunks = rerank_chunks(enriched_query, chunks)
         chunks = [c for c in chunks if c.get("_vector") is not None]
+        # Layer: chunk safety filter — remove injection-containing chunks
+        chunks = filter_chunks_safe(chunks, enriched_query)
+
+    # Layer: sanitize web snippets for injection patterns
+    if web_results:
+        web_results = sanitize_all_web_snippets(web_results)
 
     tabular_fact, tabular_file = extract_tabular_fact(enriched_query)
     if tabular_fact:
@@ -659,6 +676,11 @@ def chat_query(req: QueryRequest, db: Session = Depends(get_db)):
         reply = "Maaf, layanan AI sedang tidak tersedia. Silakan coba lagi nanti."
 
     clean_reply, citation_data = validate_citations(reply, chunk_mapping)
+
+    # Layer: strict output validation — strip any injection artifacts from LLM reply
+    clean_reply, violations = validate_output_strict(clean_reply)
+    if violations:
+        logger.warning("Output validation found %d violations in RAG reply", len(violations))
 
     # Build sources from citations (both internal and external)
     seen_keys = set()
