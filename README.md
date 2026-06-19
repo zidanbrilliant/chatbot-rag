@@ -105,7 +105,7 @@ graph TB
     end
 
     subgraph "Services"
-        LLM[LLM Client<br/>llm_client.py]
+        LLM[LLM Client<br/>groq_client.py]
         EMD[Embedding<br/>embedding.py]
         QDR[Qdrant Client<br/>qdrant_client.py]
         CHK[Chunking<br/>chunking.py]
@@ -119,15 +119,11 @@ graph TB
         AUD[Audit Log<br/>audit_log.py]
     end
 
-    subgraph "LLM Providers"
-        OLL[OllamaProvider<br/>Local fallback]
-        GR[GroqProvider<br/>Primary LLM]
-    end
-
     subgraph "External"
         QD[(Qdrant)]
         DB[(PostgreSQL)]
         RD[(Redis)]
+        GR["api.groq.com<br/>Groq LLM"]
         DDG[DuckDuckGo<br/>Web Search]
     end
 
@@ -146,7 +142,6 @@ graph TB
     SCA --> RD
     SR --> AUD
     LLM --> GR
-    LLM --> OLL
     QDR --> QD
     SR --> DB
     CFG -->|env vars| SR
@@ -243,8 +238,7 @@ sequenceDiagram
     DB-->>BE: session_id
 
     alt casual greeting
-        BE->>GR: generate_response (no context)
-        GR-->>BE: casual reply
+        BE->>BE: get_casual_response() (fixed string, no LLM)
         BE-->>FE: casual response
     else substantive
         BE->>GR: rewrite_query (if history exists)
@@ -283,8 +277,8 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     REQ["POST /api/v1/chat/query"] --> SANITIZE["Sanitize + PII redact"]
-    SANITIZE --> CASUAL{"_is_casual()?"}
-    CASUAL -->|"greeting"| GREETING["generate_response()<br/>No context, langsung jawab"]
+    SANITIZE --> CASUAL{"get_casual_response()?"}
+    CASUAL -->|"greeting"| GREETING["Fixed response<br/>No LLM call"]
     CASUAL -->|"substantive"| RAG
 
     subgraph RAG["Hybrid RAG Pipeline"]
@@ -352,38 +346,13 @@ sequenceDiagram
 
 ```mermaid
 erDiagram
-    USERS ||--o{ USER_ROLES : has
-    ROLES ||--o{ USER_ROLES : assigned
-    USERS ||--o{ DOCUMENTS : uploads
-    USERS ||--o{ CHAT_SESSIONS : owns
-    USERS ||--o{ FEEDBACK : gives
-    USERS ||--o{ AUDIT_LOGS : triggers
     DOCUMENTS ||--o{ DOCUMENT_CHUNKS : contains
     DOCUMENTS ||--o{ INGESTION_JOBS : processes
     DOCUMENTS ||--o{ MESSAGE_CITATIONS : referenced
     CHAT_SESSIONS ||--o{ CHAT_MESSAGES : has
     CHAT_MESSAGES ||--o{ MESSAGE_CITATIONS : has
-    CHAT_MESSAGES ||--o{ FEEDBACK : receives
-    RAG_EVALUATION_CASES ||--o{ RAG_EVALUATION_RUNS : evaluated
+    AUDIT_LOGS ||--|| AUDIT_LOGS : ""
 
-    USERS {
-        uuid id PK
-        varchar email UK
-        varchar name
-        varchar password_hash
-        boolean is_active
-        timestamp created_at
-        timestamp updated_at
-    }
-    ROLES {
-        uuid id PK
-        varchar name UK
-        text description
-    }
-    USER_ROLES {
-        uuid user_id PK
-        uuid role_id PK
-    }
     DOCUMENTS {
         uuid id PK
         text original_filename
@@ -396,9 +365,9 @@ erDiagram
         varchar access_level
         varchar status
         int version
-        uuid uploaded_by FK
         varchar error_code
         text error_message
+        jsonb attributes
         timestamp created_at
         timestamp updated_at
     }
@@ -428,7 +397,6 @@ erDiagram
     }
     CHAT_SESSIONS {
         uuid id PK
-        uuid user_id FK
         timestamp expires_at
         timestamp created_at
         timestamp updated_at
@@ -436,7 +404,6 @@ erDiagram
     CHAT_MESSAGES {
         uuid id PK
         uuid session_id FK
-        uuid user_id FK
         varchar role
         text content
         text query_original
@@ -455,17 +422,8 @@ erDiagram
         int quote_end
         timestamp created_at
     }
-    FEEDBACK {
-        uuid id PK
-        uuid message_id FK
-        uuid user_id FK
-        varchar feedback
-        text comment
-        timestamp created_at
-    }
     AUDIT_LOGS {
         uuid id PK
-        uuid actor_user_id FK
         varchar event_type
         varchar resource_type
         uuid resource_id
@@ -474,22 +432,54 @@ erDiagram
         jsonb metadata
         timestamp created_at
     }
-    RAG_EVALUATION_CASES {
+    PRODUCTS {
         uuid id PK
-        text question
-        text expected_answer
-        uuid expected_document_ids
-        uuid expected_chunk_ids
+        varchar sku UK
+        text name
         varchar category
+        varchar unit
+        text description
+        jsonb attributes
+        varchar source
+        boolean is_active
+        timestamp created_at
+        timestamp updated_at
+    }
+    PRODUCT_PRICES {
+        uuid id PK
+        uuid product_id FK
+        numeric price
+        varchar currency
+        date price_date
+        varchar supplier
+        varchar source
+        text notes
         timestamp created_at
     }
-    RAG_EVALUATION_RUNS {
+    PRICE_OHLC {
         uuid id PK
-        uuid case_id FK
-        text answer
-        uuid retrieved_chunk_ids
-        jsonb metrics
+        uuid product_id FK
+        date trade_date
+        numeric open
+        numeric high
+        numeric low
+        numeric close
+        numeric volume
+        varchar currency
+        varchar source
         timestamp created_at
+    }
+    MARKET_PRICE_SNAPSHOTS {
+        uuid id PK
+        varchar product_sku
+        text product_query
+        varchar marketplace
+        numeric price
+        varchar currency
+        text url
+        text snippet_excerpt
+        timestamp scraped_at
+        int age_days
     }
 ```
 
@@ -502,7 +492,6 @@ erDiagram
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/v1/chat/query` | **Hybrid RAG query** (internal + web search, non-streaming) |
-| `POST` | `/api/v1/chat/stream` | SSE streaming (may break on short responses) |
 | `POST` | `/api/v1/chat/feedback` | Thumbs up/down (`positive`/`negative`) |
 
 ### Documents
@@ -561,31 +550,38 @@ Response:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | **LLM** | | |
-| `LLM_PROVIDER` | `ollama` | `ollama` \| `groq` |
-| `GROQ_API_KEY` | — | Required jika `LLM_PROVIDER=groq` |
-| `GROQ_MODEL` | `llama-3.1-8b-instant` | Model Groq |
-| `OLLAMA_LLM_MODEL` | `qwen2.5:7b` | Fallback Ollama model |
+| `GROQ_API_KEY` | — | **Required** — Groq cloud API key |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq chat model |
 | **Embedding** | | |
-| `EMBEDDING_MODEL` | `bge-m3` | Model embedding via Ollama |
-| `EMBEDDING_DIM` | `1024` | Harus sesuai dimensi model & Qdrant |
+| `EMBEDDING_MODEL` | `bge-m3` | Embedding model via Ollama (host) |
+| `EMBEDDING_DIM` | `1024` | Must match Qdrant collection dim |
+| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama endpoint (host machine) |
 | **RAG Pipeline** | | |
-| `SIMILARITY_THRESHOLD` | `0.55` | Minimum similarity (aktual: 0.40) |
-| `CHUNK_SIZE` | `200` | Chunk size — Docker default `512` |
-| `CHUNK_OVERLAP` | `25` | Chunk overlap — Docker default `50` |
-| `HYBRID_TOP_K` | `20` | Max candidates dari Qdrant |
-| `TOP_K` | `5` | Max chunks ke LLM context |
+| `SIMILARITY_THRESHOLD` | `0.55` | Config default; **tune to 0.40** for bge-m3 |
+| `CHUNK_SIZE` | `200` | Local default; `512` in docker-compose |
+| `CHUNK_OVERLAP` | `25` | Local default; `50` in docker-compose |
+| `HYBRID_TOP_K` | `20` | Max candidates from Qdrant |
+| `TOP_K` | `5` | Max chunks sent to LLM context |
+| `MAX_QUERY_LENGTH` | `2000` | Sanitize-truncate cap |
 | **Web Search** | | |
-| `ENABLE_WEB_SEARCH` | `true` | Aktifkan hybrid search |
-| `SEARCH_PROVIDER` | `duckduckgo` | `duckduckgo` |
-| `SEARCH_MAX_RESULTS` | `5` | Max hasil web per query |
-| `SEARCH_CACHE_TTL` | `3600` | Cache web results (detik) |
-| `TAVILY_API_KEY` | — | API key jika pakai Tavily |
-| **Marketplace** | | |
-| `MARKETPLACE_CACHE_TTL_HOURS` | `24` | Cache durasi marketplace scrape (jam) |
-| `ENABLE_MARKETPLACE_SEARCH` | `true` | Aktifkan pencarian marketplace paralel |
-| **Security** | | |
-| `ENABLE_EXTERNAL_FALLBACK` | `false` | (deprecated) Google CSE |
-| `JWT_SECRET_KEY` | `change_me` | Untuk auth (belum aktif) |
+| `ENABLE_WEB_SEARCH` | `true` | Global toggle for hybrid search |
+| `SEARCH_MAX_RESULTS` | `5` | Max web results per query |
+| `SEARCH_TIMEOUT` | `10` | DuckDuckGo timeout (seconds) |
+| `SEARCH_CACHE_TTL` | `3600` | Redis web-search cache TTL (seconds) |
+| **Sessions** | | |
+| `SESSION_TIMEOUT_MINUTES` | `30` | Server-side TTL for chat session |
+| `MAX_HISTORY_TURNS` | `10` | History depth for query rewriting |
+| `SESSION_CLEANUP_INTERVAL` | `300` | Background cleanup cadence (seconds) |
+| **Upload** | | |
+| `MAX_FILE_SIZE_MB` | `50` | Per-upload cap |
+| `DATA_DIR` | `/data` | Shared volume for uploaded files |
+| **Server** | | |
+| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Comma-separated allowed origins |
+| `RATE_LIMIT_CHAT_MAX` | `30` | Per-IP chat rate limit / window |
+| `RATE_LIMIT_ADMIN_MAX` | `15` | Per-IP admin rate limit / window |
+| `RATE_LIMIT_WINDOW` | `60` | Rate-limit window (seconds) |
+| `ADMIN_API_KEY` | `supersecret` | `X-API-Key` for admin endpoints |
+| `REDIS_URL` | `redis://redis:6379/0` | Redis connection string |
 
 ---
 
@@ -609,6 +605,63 @@ Response:
 | **Freshness badge** | Setiap source card menampilkan 🕐 hari ini / 🕐 X hari lalu. Stale data dapat border kuning. |
 | **Single-sentence LLM answer** | LLM di-prompt untuk menjawab SATU KALIMAT menyoroti harga termurah + selisih. |
 | **Collapsible source cards** | Frontend show max 3 sumber, sisanya di "Lihat N lainnya" expander. |
+
+---
+
+## Recent Audit (commit `75094ef`)
+
+Ponytail-style code audit removed 1866 net lines (-2059/+193) across 57 files. Summary of what was cut:
+
+**Dead code removed**
+- `app/services/llm_client.py` (LLMProvider ABC + factory — Groq is the only impl)
+- `app/services/circuit_breaker.py` (single use, inlined)
+- `app/services/ingestion.py` (worker has its own pipeline)
+- `app/models/{user,evaluation,feedback}.py` (no consumers)
+- `app/core/logging.py` (log_interaction never called)
+- `frontend/src/components/PriceTable.jsx` (replaced by PriceCitations)
+- `POST /api/v1/chat/stream` endpoint + `sendQueryStream` (frontend never used)
+- Functions: `generate_response_stream`, `format_context`, `insert_citations`,
+  `is_citation_valid`, `build_price_table`, `to_markdown_row`,
+  `_find_unit_column`, `StrictModeResult`+`classify_query`,
+  `_validate_required_config`, `_warmup_embedding`,
+  prometheus-instrumentator middleware, request_id middleware
+
+**Config dropped** (17 fields)
+GOOGLE_API_KEY, GOOGLE_CSE_ID, TAVILY_API_KEY, JWT_SECRET_KEY,
+ENABLE_EXTERNAL_FALLBACK, SEARCH_PROVIDER, QDRANT_URL, QDRANT_GRPC_PORT,
+RATE_LIMIT_CLEANUP_INTERVAL, SESSION_MAX_TURNS, vector_size/VECTOR_SIZE,
+RATE_LIMIT_MAX, ADMIN_RATE_LIMIT_MAX legacy aliases, LLM_PROVIDER,
+OLLAMA_LLM_MODEL, `noqa: F401`-flagged `vector_size` Settings.
+
+**Deps removed** (-6)
+`pypdf2` (only pdfplumber used), `httpx` (never imported),
+`tiktoken` (never imported), `prometheus-fastapi-instrumentator`,
+`langchain`, `langchain-community` (only `langchain-text-splitters` remains).
+
+**Bugfix bundled in audit**
+The original audit deleted `User`/`Role`/`UserRole` model files. This left
+dangling `ForeignKey("users.id")` on `chat_sessions.user_id`,
+`chat_messages.user_id`, `documents.uploaded_by`,
+`audit_logs.actor_user_id`. SQLAlchemy raised `NoReferencedTableError`
+on every insert → every `/chat/query` returned 500. The fix:
+- Dropped the four FK columns from the models
+- Dropped the matching columns + FKs in the live DB
+- Updated `services/audit_log.py` to drop the `actor_user_id` param
+
+**Other shrinks**
+- `get_marketplace_label` deduplicated (deleted from response_formatter,
+  imports from marketplace_scraper)
+- `from calendar import monthrange` hoisted out of 4 function-local imports
+  in `intent_classifier.py`
+- Dead `FallbackRequest`/`FallbackResponse`/`ExternalSource` schemas
+  deleted (`/chat/fallback` endpoint was removed long ago)
+- Redundant stale pre-sort removed from `chat._handle_price_query`
+  (select_top_results already handles it)
+- `marketplace_scraper.__all__` trimmed to 3 actually-used exports
+- `_find_column` candidates pattern unified
+
+Verified after: `ruff check app/ alembic/env.py` returns 0 import errors.
+All 3 chat-query types verified end-to-end (casual, RAG, price).
 
 ---
 
