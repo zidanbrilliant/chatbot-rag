@@ -6,7 +6,7 @@ from pathlib import Path
 
 from groq import Groq, GroqError
 
-from app.config import GROQ_API_KEY, GROQ_MODEL
+from app.config import GROQ_API_KEY, GROQ_MODEL, LLM_PROVIDER
 from app.services.sanitizer import redact_pii
 
 logger = logging.getLogger("chatbot")
@@ -326,6 +326,13 @@ def validate_citations(
 
 
 def generate_response(system_prompt: str, context: str, history: str, query: str) -> str:
+    if LLM_PROVIDER.lower() == "ollama":
+        from app.services.ollama_client import generate_response_ollama
+        return generate_response_ollama(system_prompt, context, history, query)
+    return _generate_response_groq(system_prompt, context, history, query)
+
+
+def _generate_response_groq(system_prompt: str, context: str, history: str, query: str) -> str:
     client = get_groq()
     messages = [{"role": "system", "content": system_prompt}]
     if history:

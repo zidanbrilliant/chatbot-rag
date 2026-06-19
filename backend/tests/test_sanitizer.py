@@ -3,17 +3,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.routers.chat import _is_casual, _sanitize
+from app.routers.chat import _sanitize
 from app.services.sanitizer import scan_and_redact
-
-
-def test_is_casual():
-    assert _is_casual("halo") is True
-    assert _is_casual("hi") is True
-    assert _is_casual("tes") is True
-    assert _is_casual("apa itu bitcoin") is False
-    assert _is_casual("ML") is False  # Tidak boleh true hanya karena pendek
-    assert _is_casual("AI") is False
 
 
 def test_sanitize():

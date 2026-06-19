@@ -16,7 +16,7 @@ from app.core.config import (  # noqa: F401
     MAX_HISTORY_TURNS,
     MAX_QUERY_LENGTH,
     OLLAMA_BASE_URL,
-    OLLAMA_LLM_MODEL,
+    OLLAMA_CHAT_MODEL,
     QDRANT_COLLECTION,
     QDRANT_HOST,
     QDRANT_PORT,

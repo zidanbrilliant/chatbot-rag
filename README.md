@@ -14,7 +14,7 @@ Chatbot berbasis **Retrieval-Augmented Generation (RAG)** dengan hybrid search �
 | Relational DB | PostgreSQL 16 |
 | Cache | Redis 7 |
 | Embedding | `bge-m3` via Ollama (lokal, GPU) |
-| LLM | **Groq** `llama-3.1-8b-instant` (cloud) |
+| LLM | **Groq** (cloud, primary) or **Ollama** (local, set `LLM_PROVIDER=ollama`) |
 | Web Search | DuckDuckGo (gratis, no API key) |
 | Chunking | LangChain `RecursiveCharacterTextSplitter` |
 | Container | Docker Compose (6 services) |
@@ -550,8 +550,10 @@ Response:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | **LLM** | | |
-| `GROQ_API_KEY` | — | **Required** — Groq cloud API key |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq chat model |
+| `LLM_PROVIDER` | `groq` | `groq` (cloud) or `ollama` (local) |
+| `GROQ_API_KEY` | — | **Required** when `LLM_PROVIDER=groq` |
+| `GROQ_MODEL` | `llama-3.1-8b-instant` | Groq chat model |
+| `OLLAMA_CHAT_MODEL` | `qwen2.5:7b` | Chat model when `LLM_PROVIDER=ollama` |
 | **Embedding** | | |
 | `EMBEDDING_MODEL` | `bge-m3` | Embedding model via Ollama (host) |
 | `EMBEDDING_DIM` | `1024` | Must match Qdrant collection dim |

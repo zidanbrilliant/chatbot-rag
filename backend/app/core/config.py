@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     vector_size: int = Field(1024)
     groq_api_key: str = Field("", description="REQUIRED for Groq provider")
     groq_model: str = Field("llama-3.3-70b-versatile")
-    llm_provider: str = Field("ollama", description="ollama | groq")
-    ollama_llm_model: str = Field("qwen2.5:7b")
+    llm_provider: str = Field("groq", description="groq | ollama")
+    ollama_chat_model: str = Field("qwen2.5:7b", description="Chat model for local Ollama")
     ollama_base_url: str = Field("http://host.docker.internal:11434")
     embedding_model: str = Field("bge-m3")
     embedding_dim: int = Field(1024)
@@ -67,7 +67,7 @@ VECTOR_SIZE = _settings.vector_size
 GROQ_API_KEY = _settings.groq_api_key
 GROQ_MODEL = _settings.groq_model
 LLM_PROVIDER = _settings.llm_provider
-OLLAMA_LLM_MODEL = _settings.ollama_llm_model
+OLLAMA_CHAT_MODEL = _settings.ollama_chat_model
 OLLAMA_BASE_URL = _settings.ollama_base_url
 EMBEDDING_MODEL = _settings.embedding_model
 EMBEDDING_DIM = _settings.embedding_dim
