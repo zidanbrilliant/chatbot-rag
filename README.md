@@ -1,6 +1,6 @@
 # Chatbot RAG — Hybrid Internal + Web Search
 
-Chatbot berbasis **Retrieval-Augmented Generation (RAG)** dengan hybrid search — mencari dari dokumen internal (PDF, DOCX, CSV, XLSX) DAN dari web secara paralel. Menggunakan **Groq** sebagai LLM utama (cloud, cepat) dan **Ollama + bge-m3** untuk embedding lokal.
+Chatbot berbasis **Retrieval-Augmented Generation (RAG)** dengan hybrid search — mencari dari dokumen internal (PDF, DOCX, CSV, XLSX) DAN dari web secara paralel. LLM utama: **Groq** (cloud, cepat). Alternatif lokal: **Ollama** (`LLM_PROVIDER=ollama`). Embedding selalu via Ollama + `bge-m3`.
 
 ---
 
@@ -29,7 +29,8 @@ ollama pull bge-m3
 
 # 2. Setup environment
 cp .env.example .env
-# Isi GROQ_API_KEY (required untuk LLM provider)
+# Isi GROQ_API_KEY jika LLM_PROVIDER=groq (default).
+# Untuk local LLM, set LLM_PROVIDER=ollama (lihat "Switching LLM provider").
 
 # 3. Start all services
 docker compose up --build -d
@@ -90,7 +91,7 @@ graph TB
 | `db` | 5432 | PostgreSQL 16 | Metadata, sessions, feedback, audit |
 | `qdrant` | 6333/6334 | Qdrant v1.12.1 | Vector storage (1024-dim Cosine) |
 | `redis` | 6379 | Redis 7 | Web search cache, rate limiting |
-| `ollama` | 11434 | Host machine (NOT containerized) | Embedding only (`bge-m3`) |
+| `ollama` | 11434 | Host machine (NOT containerized) | Embedding always (`bge-m3`); chat LLM when `LLM_PROVIDER=ollama` |
 
 ### Component Architecture (Backend)
 
@@ -105,7 +106,8 @@ graph TB
     end
 
     subgraph "Services"
-        LLM[LLM Client<br/>groq_client.py]
+        LLM[LLM Client<br/>groq_client.py<br/>(dispatcher)]
+        OLL[Ollama Client<br/>ollama_client.py]
         EMD[Embedding<br/>embedding.py]
         QDR[Qdrant Client<br/>qdrant_client.py]
         CHK[Chunking<br/>chunking.py]
@@ -142,6 +144,7 @@ graph TB
     SCA --> RD
     SR --> AUD
     LLM --> GR
+    OLL --> OLLAMA
     QDR --> QD
     SR --> DB
     CFG -->|env vars| SR
@@ -592,7 +595,7 @@ Response:
 | Decision | Alasan |
 |----------|--------|
 | **Hybrid RAG (internal + web)** | Setiap query cari di Qdrant + DuckDuckGo paralel. Hasil digabung dengan label `[C1]` (internal) dan `[W1]` (web). LLM synthesizes natural answer. |
-| **Groq sebagai primary LLM** | Groq cloud GPU ~200 tok/s vs Ollama lokal ~10 tok/s. Latency turun dari 40-50s ke ~3s per query. Embedding tetap via Ollama (ringan, 0.1s). |
+| **Groq sebagai primary LLM** | Groq cloud GPU ~200 tok/s vs Ollama lokal ~10 tok/s. Latency turun dari 40-50s ke ~3s per query. Embedding tetap via Ollama (ringan, 0.1s). Bisa switch ke Ollama untuk chat juga (`LLM_PROVIDER=ollama`), latency ~5-15s tapi zero external dependency. |
 | **DuckDuckGo gratis (no API key)** | Provider web search gratis, unlimited. Ada DNS spoofing di ISP Indonesia — fix via `extra_hosts` di docker-compose + Python DNS patch. |
 | **Redis cache web search** | Query yang sama dalam 1 jam tidak perlu search ulang ke DuckDuckGo. Cache key = SHA256(query). |
 | **Chunk-ID citation dual** | Bukan semantic similarity post-hoc. LLM diminta pakai `[C1]` untuk internal, `[W1]` untuk web — divalidasi regex. |
@@ -628,12 +631,16 @@ Ponytail-style code audit removed 1866 net lines (-2059/+193) across 57 files. S
   `_validate_required_config`, `_warmup_embedding`,
   prometheus-instrumentator middleware, request_id middleware
 
-**Config dropped** (17 fields)
+**Config dropped** (15 fields)
 GOOGLE_API_KEY, GOOGLE_CSE_ID, TAVILY_API_KEY, JWT_SECRET_KEY,
 ENABLE_EXTERNAL_FALLBACK, SEARCH_PROVIDER, QDRANT_URL, QDRANT_GRPC_PORT,
 RATE_LIMIT_CLEANUP_INTERVAL, SESSION_MAX_TURNS, vector_size/VECTOR_SIZE,
-RATE_LIMIT_MAX, ADMIN_RATE_LIMIT_MAX legacy aliases, LLM_PROVIDER,
-OLLAMA_LLM_MODEL, `noqa: F401`-flagged `vector_size` Settings.
+RATE_LIMIT_MAX, ADMIN_RATE_LIMIT_MAX legacy aliases, `noqa: F401`-flagged
+`vector_size` Settings.
+
+Note: `LLM_PROVIDER` and `OLLAMA_LLM_MODEL` were initially dropped in this
+commit, then re-added in `87b6330` as the switch for the local Ollama
+chat-LLM fallback. See "Switching LLM provider" section below.
 
 **Deps removed** (-6)
 `pypdf2` (only pdfplumber used), `httpx` (never imported),
@@ -664,6 +671,46 @@ on every insert → every `/chat/query` returned 500. The fix:
 
 Verified after: `ruff check app/ alembic/env.py` returns 0 import errors.
 All 3 chat-query types verified end-to-end (casual, RAG, price).
+
+---
+
+## Switching LLM provider
+
+Chat completion is configurable via `LLM_PROVIDER`. Default is `groq` (cloud). Set to `ollama` to use a local model — no code change, no rebuild.
+
+**Switch to local Ollama** (in `.env`):
+
+```env
+LLM_PROVIDER=ollama
+OLLAMA_CHAT_MODEL=qwen2.5:7b
+```
+
+Then restart the backend:
+
+```bash
+docker compose up -d backend
+```
+
+The dispatcher in `groq_client.py:generate_response()` routes to `ollama_client.py:generate_response_ollama()`. All callers (`chat.py`) work unchanged.
+
+**Prerequisites** (host machine):
+
+```bash
+ollama serve              # already running if embedding works
+ollama pull qwen2.5:7b    # default model; ~4.7GB
+```
+
+Other working models: `qwen2.5-coder:7b`, `llama3.1:latest`, `Mistral:7b`, `qwen3.5:9b`. **Do NOT use `qwen3.5:4b`** — it's a thinking model (~29s per greeting).
+
+**Trade-offs**:
+- **Groq**: ~2-4s/query, requires `GROQ_API_KEY`, costs API credits
+- **Ollama**: ~5-15s/query, free, needs local GPU/RAM, no external dependency
+
+Frontend behavior is identical — same response shape, same sources, same citations. Only latency differs.
+
+**Rollback**: change `LLM_PROVIDER=ollama` back to `groq`, restart backend.
+
+Both paths share retry logic (3x exponential backoff) and PII redaction (`redact_pii(context)`).
 
 ---
 
