@@ -55,7 +55,6 @@ class Document(Base):
         nullable=False,
     )
     version = Column(Integer, default=1, nullable=False)
-    uploaded_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     error_code = Column(String(50), nullable=True)
     error_message = Column(Text, nullable=True)
     attributes = Column(JSONB, nullable=True)

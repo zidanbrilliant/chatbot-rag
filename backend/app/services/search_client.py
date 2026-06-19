@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import socket
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 logger = logging.getLogger("chatbot")
 

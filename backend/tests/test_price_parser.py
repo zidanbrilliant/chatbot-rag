@@ -5,7 +5,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.price_parser import extract_prices_from_snippet
 
-
 # ── IDR formats ────────────────────────────────────────
 
 

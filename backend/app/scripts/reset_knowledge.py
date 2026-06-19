@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from sqlalchemy import text
 
 from app.config import QDRANT_COLLECTION, VECTOR_SIZE
-from app.database import SessionLocal, engine
+from app.database import SessionLocal
 from app.services.qdrant_client import get_qdrant
 
 logger = logging.getLogger("chatbot.reset")

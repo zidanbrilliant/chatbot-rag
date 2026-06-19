@@ -16,22 +16,19 @@ Why search-driven (not real page scraping):
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.config import ENABLE_WEB_SEARCH, SEARCH_MAX_RESULTS
+from app.config import ENABLE_WEB_SEARCH
 from app.models.market_price import (
-    MARKETPLACE_BRANDS,
     MARKETPLACE_DOMAINS,
     MARKETPLACE_TOKOPEDIA,
-    MarketPriceSnapshot,
     SUPPORTED_MARKETPLACES,
+    MarketPriceSnapshot,
 )
 from app.services.price_parser import ExtractedPrice, extract_prices_from_snippet
 from app.services.search_client import search_web
@@ -195,7 +192,7 @@ class MarketplaceScraper:
         results: list[MarketPrice] = []
 
         # Phase 1: parallel cache lookups
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ThreadPoolExecutor
         cache_hits: dict[str, MarketPrice] = {}
         cache_misses: list[str] = []
 
@@ -222,7 +219,7 @@ class MarketplaceScraper:
 
         # Phase 2: parallel live search for cache misses
         if cache_misses:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
+            from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=len(cache_misses)) as ex:
                 future_to_mp = {
                     ex.submit(self.search_marketplace, product_query, mp): mp
@@ -323,9 +320,7 @@ def is_marketplace_url(url: str) -> bool:
 
 
 __all__ = [
-    "CACHE_TTL_HOURS",
     "MarketPrice",
     "MarketplaceScraper",
     "get_marketplace_label",
-    "is_marketplace_url",
 ]

@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from calendar import monthrange
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
@@ -389,7 +390,6 @@ def _extract_date_range(q_lower: str) -> tuple[date, date] | None:
             if end_month == 12:
                 end = date(year, 12, 31)
             else:
-                from calendar import monthrange
                 end = date(year, end_month, monthrange(year, end_month)[1])
             return (start, end)
         except ValueError:
@@ -408,7 +408,6 @@ def _extract_date_range(q_lower: str) -> tuple[date, date] | None:
             start_month = MONTH_MAP_ID[m.group(1).lower()]
             end_month = MONTH_MAP_ID[m.group(2).lower()]
             year = int(m.group(3))
-            from calendar import monthrange
             start = date(year, start_month, 1)
             end = date(year, end_month, monthrange(year, end_month)[1])
             return (start, end)
@@ -421,7 +420,6 @@ def _extract_date_range(q_lower: str) -> tuple[date, date] | None:
             start_month = MONTH_MAP_ID[m.group(1).lower()]
             end_month = MONTH_MAP_ID[m.group(2).lower()]
             year = int(m.group(3))
-            from calendar import monthrange
             start = date(year, start_month, 1)
             end = date(year, end_month, monthrange(year, end_month)[1])
             return (start, end)
@@ -434,7 +432,6 @@ def _extract_date_range(q_lower: str) -> tuple[date, date] | None:
         try:
             month = MONTH_MAP_ID[m.group(1).lower()]
             year = int(m.group(2))
-            from calendar import monthrange
             start = date(year, month, 1)
             end = date(year, month, monthrange(year, month)[1])
             return (start, end)

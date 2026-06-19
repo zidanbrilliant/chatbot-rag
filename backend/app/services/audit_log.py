@@ -15,7 +15,6 @@ def log_event(
     ip_address: str | None = None,
     user_agent: str | None = None,
     metadata: dict | None = None,
-    actor_user_id: str | None = None,
 ) -> None:
     """Write one audit log entry. Never raises — failures are swallowed."""
     try:
@@ -23,7 +22,6 @@ def log_event(
         try:
             entry = AuditLog(
                 id=uuid.uuid4(),
-                actor_user_id=uuid.UUID(actor_user_id) if actor_user_id else None,
                 event_type=event_type,
                 resource_type=resource_type,
                 resource_id=uuid.UUID(resource_id) if resource_id else None,

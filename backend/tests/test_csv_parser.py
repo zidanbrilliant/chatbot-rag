@@ -7,8 +7,8 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.document_processor import (
-    parse_csv,
     _detect_csv_separator,
+    parse_csv,
 )
 
 

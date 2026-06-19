@@ -55,7 +55,6 @@ def evaluate(
     # ── Rule 2: all scores below abstain threshold ──
     scores = [c.get("score", 0) for c in chunks]
     max_score = max(scores) if scores else 0
-    avg_score = sum(scores) / len(scores) if scores else 0
 
     if max_score < ABSTAIN_MAX_SCORE:
         return AnswerabilityResult(

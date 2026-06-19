@@ -11,7 +11,6 @@ class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
@@ -32,7 +31,6 @@ class ChatMessage(Base):
         UUID(as_uuid=True), ForeignKey("chat_sessions.id", ondelete="CASCADE"),
         nullable=False, index=True,
     )
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     role = Column(String(10), nullable=False)
     content = Column(Text, nullable=False)
     query_original = Column(Text, nullable=True)

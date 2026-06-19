@@ -6,7 +6,6 @@ sessions to avoid mutating real DB state.
 """
 
 import sys
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -14,8 +13,8 @@ from unittest.mock import MagicMock
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.scripts.cleanup_failed_documents import (
-    list_failed,
     list_duplicates,
+    list_failed,
     list_orphaned_jobs,
 )
 

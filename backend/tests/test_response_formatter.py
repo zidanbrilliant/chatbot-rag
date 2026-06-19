@@ -1,19 +1,18 @@
 import os
 import sys
-from decimal import Decimal
 from datetime import date
+from decimal import Decimal
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.intent_classifier import PriceIntent
 from app.services.price_service import PriceResult
 from app.services.response_formatter import (
-    build_nl_response,
-    build_llm_context,
-    build_fallback_nl,
     _format_date_id,
+    build_fallback_nl,
+    build_llm_context,
+    build_nl_response,
 )
-
 
 # ── build_nl_response ──────────────────────────────────
 
@@ -216,8 +215,9 @@ def test_source_to_dict():
 
 
 def test_build_nl_response_with_market_prices():
-    from app.services.marketplace_scraper import MarketPrice
     from datetime import datetime
+
+    from app.services.marketplace_scraper import MarketPrice
 
     intent = PriceIntent(
         is_price_query=True, query_type="catalog", target="Polytron PAS 8C28"
@@ -265,8 +265,9 @@ def test_build_nl_response_with_market_prices():
 
 
 def test_llm_context_includes_comparison_block():
-    from app.services.marketplace_scraper import MarketPrice
     from datetime import datetime
+
+    from app.services.marketplace_scraper import MarketPrice
 
     intent = PriceIntent(
         is_price_query=True, query_type="catalog", target="Polytron PAS 8C28"
@@ -300,7 +301,8 @@ def test_llm_context_includes_comparison_block():
 
 def test_llm_context_marks_stale_internal():
     from datetime import date, timedelta
-    from app.services.response_formatter import build_nl_response, build_llm_context
+
+    from app.services.response_formatter import build_llm_context, build_nl_response
     intent = PriceIntent(
         is_price_query=True, query_type="catalog", target="X"
     )
@@ -345,8 +347,9 @@ def test_price_prompt_has_single_sentence_rule():
 
 
 def test_fallback_nl_includes_marketplace():
-    from app.services.marketplace_scraper import MarketPrice
     from datetime import datetime
+
+    from app.services.marketplace_scraper import MarketPrice
 
     intent = PriceIntent(
         is_price_query=True, query_type="catalog", target="Polytron PAS 8C28"

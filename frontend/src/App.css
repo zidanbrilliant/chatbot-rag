@@ -404,11 +404,4 @@ th { font-weight: 600; color: #555; }
   color: #c62828;
 }
 
-/* Legacy price table styles (kept for backward compat) */
-.price-table-wrapper {
-  margin-top: 12px;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  overflow: hidden;
-  background: #fafafa;
-}
+

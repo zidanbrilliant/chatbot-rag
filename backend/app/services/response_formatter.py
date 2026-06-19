@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from decimal import Decimal
 from typing import Any
 
 from app.services.intent_classifier import PriceIntent
 from app.services.price_service import PriceResult
+from app.services.marketplace_scraper import get_marketplace_label
 
 logger = logging.getLogger("chatbot")
 
@@ -109,7 +109,6 @@ def build_nl_response(
     market_prices = market_prices or []
     for mp in market_prices:
         label = f"{get_marketplace_label(mp.marketplace)} — {mp.url[:60] if mp.url else mp.marketplace}"
-        cached_tag = " (cached)" if mp.is_cached else ""
         sources.append(SourceCitation(
             source_id=next_id,
             label=label,
@@ -325,7 +324,6 @@ def build_fallback_nl(nl: NLResponse, intent: PriceIntent) -> str:
         parts.append("")
         parts.append("Harga pasaran (marketplace):")
         for s in marketplace:
-            cached = ""
             parts.append(
                 f"  - {s.label}: {s.price} [{s.source_id}]"
             )
@@ -349,20 +347,6 @@ def build_fallback_nl(nl: NLResponse, intent: PriceIntent) -> str:
 
 
 # ── Helpers ────────────────────────────────────────────
-
-
-def get_marketplace_label(marketplace: str) -> str:
-    """Human-readable Indonesian label for a marketplace ID."""
-    labels = {
-        "tokopedia": "Tokopedia",
-        "shopee": "Shopee",
-        "lazada": "Lazada",
-        "bukalapak": "Bukalapak",
-        "bhinneka": "Bhinneka",
-        "blibli": "Blibli",
-        "brand_store": "Official Store",
-    }
-    return labels.get(marketplace, marketplace.title())
 
 
 def _format_internal_label(r: PriceResult) -> str:
@@ -425,78 +409,3 @@ def _format_date_id(d) -> str:
         return ""
     return f"{d.day} {ID_MONTHS[d.month]} {d.year}"
 
-
-# ── Backward-compat: legacy function kept ───────────────
-
-
-def build_price_table(
-    internal_results: list[PriceResult],
-    web_results: list[dict],
-    query: str = "",
-    target: str = "",
-    max_internal: int = 5,
-    max_web: int = 5,
-):
-    """Legacy function — returns simple PriceTable for backward compat."""
-    from dataclasses import dataclass as _dc
-
-    @_dc
-    class PriceTable:
-        rows: list = None
-        query: str = ""
-        target: str = ""
-
-        def to_markdown(self) -> str:
-            return ""
-
-        def to_plain_text(self) -> str:
-            return ""
-
-        def to_dict_list(self) -> list[dict]:
-            return []
-
-    table = PriceTable(rows=[], query=query, target=target)
-    seen: set = set()
-    for r in internal_results[:max_internal]:
-        key = (r.source_detail, float(r.price), r.currency)
-        if key in seen:
-            continue
-        seen.add(key)
-        table.rows.append({
-            "source": r.source_detail or r.source,
-            "product": r.product_name,
-            "price": f"{r.currency} {float(r.price):,.0f}",
-            "unit": r.unit or "-",
-            "date": r.price_date.isoformat() if r.price_date else "-",
-            "type": "internal",
-            "url": None,
-            "confidence": r.relevance_score,
-            "field_type": r.field_type or "",
-            "field_label": _field_label_id(r.field_type),
-        })
-    for w in web_results[:max_web]:
-        snippet = w.get("snippet", "")
-        if not snippet:
-            continue
-        from app.services.price_parser import extract_prices_from_snippet
-        prices = extract_prices_from_snippet(snippet)
-        if not prices:
-            continue
-        top = prices[0]
-        key = (w.get("title", ""), top.value, top.currency)
-        if key in seen:
-            continue
-        seen.add(key)
-        table.rows.append({
-            "source": w.get("title", "")[:50],
-            "product": target or query,
-            "price": f"{top.currency} {top.value:,.0f}",
-            "unit": "-",
-            "date": "recent",
-            "type": "external",
-            "url": w.get("url"),
-            "confidence": top.confidence,
-            "field_type": top.field_type or "",
-            "field_label": _field_label_id(top.field_type),
-        })
-    return table

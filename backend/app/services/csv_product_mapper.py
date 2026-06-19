@@ -137,7 +137,7 @@ def _read_csv_flexible(file_path: str) -> pd.DataFrame | None:
 
     # Fallback: detect separator by counting characters in first line
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             first_line = f.readline()
         candidates = {";": first_line.count(";"), ",": first_line.count(","),
                       "\t": first_line.count("\t"), "|": first_line.count("|")}

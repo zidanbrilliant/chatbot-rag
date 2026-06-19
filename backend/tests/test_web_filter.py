@@ -4,7 +4,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.intent_classifier import PriceIntent
-from app.services.price_parser import ExtractedPrice, extract_prices_from_snippet
+from app.services.price_parser import ExtractedPrice
 from app.services.web_filter import filter_web_by_context, pick_cheapest_web_results, relax_filter
 
 

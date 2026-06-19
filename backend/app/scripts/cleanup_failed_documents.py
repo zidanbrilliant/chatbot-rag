@@ -24,10 +24,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from app.config import DATA_DIR  # noqa: E402
-from app.database import SessionLocal  # noqa: E402
-from app.models.document import Document, DocumentStatus  # noqa: E402
-from app.models.ingestion import IngestionJob, IngestionJobStatus  # noqa: E402
+from app.config import DATA_DIR
+from app.database import SessionLocal
+from app.models.document import Document, DocumentStatus
+from app.models.ingestion import IngestionJob, IngestionJobStatus
 
 logger = logging.getLogger("chatbot.cleanup")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")

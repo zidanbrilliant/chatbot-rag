@@ -9,16 +9,15 @@ Tests the full pipeline:
 
 import os
 import sys
-from decimal import Decimal
 from datetime import date
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.database import SessionLocal
 from app.services.intent_classifier import detect_price_intent
-from app.services.price_service import PriceService
-from app.services.response_formatter import build_price_table
 from app.services.price_parser import extract_prices_from_snippet
+from app.services.price_service import PriceService
+from app.services.response_formatter import build_nl_response
 
 
 def banner(msg: str) -> None:
@@ -177,24 +176,15 @@ def test_full_pipeline_hybrid():
             },
         ]
 
-        table = build_price_table(internal, mock_web, query="berapa harga Beras", target="Beras")
+        nl_resp = build_nl_response(internal, mock_web, intent)
 
         print(f"  internal: {len(internal)} rows")
         print(f"  web:      {len(mock_web)} results")
-        print(f"  table:    {len(table.rows)} rows")
+        print(f"  sources:  {len(nl_resp.sources)}")
         print()
-        print("  Markdown output:")
-        for line in table.to_markdown().split("\n"):
-            print(f"    {line}")
-        print()
-        print("  Plain text output:")
-        for line in table.to_plain_text().split("\n"):
-            print(f"    {line}")
-        print()
-        print("  Dict output (frontend metadata):")
-        for d in table.to_dict_list():
-            print(f"    {d}")
-        assert len(table.rows) >= 1
+        for s in nl_resp.sources:
+            print(f"  [{s.source_id}] {s.source_type} {s.label}: {s.price}")
+        assert len(nl_resp.sources) >= 1
         print("  PASS")
     finally:
         db.close()

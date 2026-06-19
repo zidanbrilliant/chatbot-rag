@@ -3,15 +3,14 @@
 import os
 import sys
 import tempfile
-from decimal import Decimal
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.price_service import PriceService
-
 
 # ── Helper: mock product ──────────────────────────────
 
@@ -232,37 +231,15 @@ def test_search_from_files_no_data_dir():
     assert results == []
 
 
-# ── to_markdown_row on PriceResult ────────────────────
-
-
-def test_to_markdown_row_basic():
-    from app.services.price_service import PriceResult
-
-    r = PriceResult(
-        product_name="Beras",
-        price=Decimal("75000"),
-        currency="IDR",
-        unit="5kg",
-        source="postgres",
-        source_detail="sku-1",
-    )
-    row = r.to_markdown_row()
-    assert row["sumber"] == "sku-1"
-    assert row["produk"] == "Beras"
-    assert "IDR" in row["harga"]
-    assert row["satuan"] == "5kg"
-    assert row["tipe"] == "internal"
-
-
 # ── OHLC queries (NEW) ──────────────────────────────────
 
 
 def test_ohlc_by_date_high():
     """Test lookup_ohlc_by_date with mocked OHLC data."""
     from datetime import date
-    from app.services.price_service import PriceService
-    from app.models.price import PriceOHLC
     from unittest.mock import MagicMock
+
+    from app.services.price_service import PriceService
 
     # Mock product with OHLC
     mock_ohlc = MagicMock()
@@ -315,8 +292,9 @@ def test_ohlc_by_date_no_match():
 def test_ohlc_by_range_max():
     """Test lookup_ohlc_by_range with MAX aggregation."""
     from datetime import date
-    from app.services.price_service import PriceService
     from unittest.mock import MagicMock
+
+    from app.services.price_service import PriceService
 
     mock_product = MagicMock()
     mock_product.name = "Bitcoin"
@@ -537,8 +515,9 @@ def test_get_lowest_by_date_no_price_on_date():
 
 def test_get_lowest_ohlc_recent_signature():
     """Verify method signature exists and accepts correct args."""
-    from app.services.price_service import PriceService
     import inspect
+
+    from app.services.price_service import PriceService
     mock_db = MagicMock()
     service = PriceService(mock_db, data_dir="/nonexistent")
     sig = inspect.signature(service.get_lowest_ohlc_recent)
@@ -590,8 +569,9 @@ def test_build_name_strategies_includes_synonym():
 
 
 def test_select_top_results_picks_cheapest_first():
-    from datetime import date, timedelta
+    from datetime import date
     from decimal import Decimal
+
     from app.services.price_service import select_top_results
 
     internal = [
@@ -608,6 +588,7 @@ def test_select_top_results_picks_cheapest_first():
 def test_select_top_results_picks_most_recent_as_second():
     from datetime import date, timedelta
     from decimal import Decimal
+
     from app.services.price_service import select_top_results
 
     today = date.today()
@@ -628,6 +609,7 @@ def test_select_top_results_picks_most_recent_as_second():
 def test_select_top_results_demotes_stale_to_bottom():
     from datetime import date, timedelta
     from decimal import Decimal
+
     from app.services.price_service import select_top_results
 
     today = date.today()
@@ -646,6 +628,7 @@ def test_select_top_results_demotes_stale_to_bottom():
 def test_select_top_results_only_stale_returns_cheapest_first():
     from datetime import date, timedelta
     from decimal import Decimal
+
     from app.services.price_service import select_top_results
 
     today = date.today()
@@ -664,8 +647,9 @@ def test_select_top_results_only_stale_returns_cheapest_first():
 def test_select_top_results_picks_cheapest_marketplace():
     from datetime import datetime, timedelta
     from decimal import Decimal
-    from app.services.price_service import select_top_results
+
     from app.services.marketplace_scraper import MarketPrice
+    from app.services.price_service import select_top_results
 
     market = [
         MarketPrice(
@@ -700,6 +684,7 @@ def test_select_top_results_empty_inputs():
 def test_select_top_results_respects_max_internal():
     from datetime import date
     from decimal import Decimal
+
     from app.services.price_service import select_top_results
 
     internal = [
@@ -713,8 +698,9 @@ def test_select_top_results_respects_max_internal():
 def test_select_top_results_merges_internal_and_marketplace():
     from datetime import date, datetime
     from decimal import Decimal
-    from app.services.price_service import select_top_results
+
     from app.services.marketplace_scraper import MarketPrice
+    from app.services.price_service import select_top_results
 
     internal = [
         make_price_for_test("DB Product", Decimal("2500000"), date.today()),

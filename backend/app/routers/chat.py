@@ -1,21 +1,16 @@
-import asyncio
-import json
 import logging
 import re
 import time
 import uuid
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.config import (
-    HYBRID_TOP_K,
     MAX_HISTORY_TURNS,
     MAX_QUERY_LENGTH,
-    QDRANT_COLLECTION,
     SESSION_TIMEOUT_MINUTES,
     SIMILARITY_THRESHOLD,
     TOP_K,
@@ -29,24 +24,24 @@ from app.schemas.chat import (
     QueryResponse,
     Source,
 )
+from app.services.answerability import ABSTAIN_MESSAGE
+from app.services.answerability import evaluate as evaluate_answerability
+from app.services.audit_log import log_web_search
 from app.services.embedding import generate_embedding
-from app.services.intent_classifier import detect_price_intent
-from app.services.llm_client import (
+from app.services.groq_client import (
     expand_synonyms,
     filter_chunks_safe,
     format_context_with_ids,
     format_hybrid_context,
     generate_response,
-    generate_response_stream,
-    insert_citations,
-    is_citation_valid,
     rerank_chunks,
     rewrite_query,
     validate_citations,
 )
-from app.services.qdrant_client import get_qdrant, multi_source_search
+from app.services.intent_classifier import detect_price_intent
+from app.services.marketplace_scraper import MarketplaceScraper
 from app.services.price_service import PriceService, select_top_results
-from app.services.marketplace_scraper import MarketplaceScraper, MarketPrice
+from app.services.qdrant_client import multi_source_search
 from app.services.response_formatter import (
     PRICE_NL_SYSTEM_PROMPT,
     STRICT_SYSTEM_PROMPT,
@@ -55,16 +50,12 @@ from app.services.response_formatter import (
     build_nl_response,
 )
 from app.services.sanitizer import (
-    sanitize_web_snippet as _sanitize_snippet,
     scan_and_redact,
     scan_for_injection,
     validate_output_strict,
 )
+from app.services.search_cache import cache_search_results, get_cached_results
 from app.services.search_client import search_web
-from app.services.search_cache import get_cached_results, cache_search_results
-from app.services.answerability import ABSTAIN_MESSAGE, evaluate as evaluate_answerability
-from app.services.audit_log import log_web_search, log_rag_query
-from app.services.groq_client import format_context
 from app.services.structured_extractor import extract_tabular_fact
 from app.services.web_filter import (
     enrich_web_with_source_score,
@@ -79,25 +70,12 @@ router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
 logger = logging.getLogger("chatbot")
 
-# Import strict mode classifier for fixed casual responses
-from app.services.strict_mode import classify_query, get_casual_response as _get_casual
+from app.services.strict_mode import get_casual_response as _get_casual
 
 SYSTEM_PROMPT = STRICT_SYSTEM_PROMPT  # use strict KB-only prompt everywhere
 
-CASUAL_PATTERNS = [
-    r"^(hai|halo|hi|hey|hei|assalamualaikum|selamat\s+\w+)[\s!.]*$",
-    r"^(apa\s+kabar|gimana\s+kabar|piye\s+kabar)[\s?!.]*$",
-    r"^(tes|test|coba|testing)[\s!.]*$",
-    r"^(kamu\s+siapa|siapa\s+kamu|nama\s+kamu|kamu\s+apa)[\s?!.]*$",
-    r"^(terima\s+kasih|makasih|thanks|thank\s+you)[\s!.]*$",
-]
-
 FALLBACK_MESSAGE = (
     "Maaf, informasi tersebut tidak ditemukan di knowledge base maupun sumber online."
-)
-
-OOC_MESSAGE = (
-    "Maaf, saya hanya bisa membantu pertanyaan seputar dokumen " "yang tersedia di knowledge base."
 )
 
 
@@ -127,11 +105,6 @@ def _sanitize(text: str) -> str:
     )
     text = re.sub(r"\s+", " ", text)
     return text[:MAX_QUERY_LENGTH].strip()
-
-
-def _is_casual(query: str) -> bool:
-    """Check if query is casual greeting — for fixed response routing."""
-    return _get_casual(query) is not None
 
 
 def get_or_create_session(session_id: str | None, db: Session) -> ChatSession:
@@ -314,16 +287,6 @@ def _handle_price_query(
 
     all_internal = internal_results + file_results
 
-    # Deprioritize stale internal results (>30 days old) — move to end of list
-    fresh_internal: list = []
-    stale_internal: list = []
-    for r in all_internal:
-        if getattr(r, "is_stale", False):
-            stale_internal.append(r)
-        else:
-            fresh_internal.append(r)
-    all_internal = fresh_internal + stale_internal
-
     # Apply strict product match on web results (filter to same model)
     if web_results and intent.target:
         web_results = filter_web_by_product_match(web_results, intent.target)
@@ -410,9 +373,7 @@ def _handle_price_query(
         reply = reply + "\n\n_Catatan: Harga dapat berubah sewaktu-waktu. Selalu verifikasi ke sumber resmi._"
 
     # Confidence
-    if all_internal and web_results:
-        confidence = "high"
-    elif all_internal:
+    if (all_internal and web_results) or all_internal:
         confidence = "high"
     elif web_results:
         confidence = "medium"
@@ -458,7 +419,7 @@ def _handle_price_query(
 @router.post("/query", response_model=QueryResponse)
 def chat_query(req: QueryRequest, db: Session = Depends(get_db)):
     query = _sanitize(req.query)
-    query, pii_findings = scan_and_redact(query)
+    query, _ = scan_and_redact(query)
 
     # Layer 1: scan for prompt injection in user input
     query, was_injected = scan_for_injection(query)
@@ -728,6 +689,7 @@ def chat_query(req: QueryRequest, db: Session = Depends(get_db)):
     db.commit()
 
     from uuid import UUID as _UUID
+
     from app.models.chat import MessageCitation
 
     for cit in citation_data:
@@ -759,227 +721,6 @@ def chat_query(req: QueryRequest, db: Session = Depends(get_db)):
         sources=sources,
         confidence=gate.confidence,
     )
-
-
-@router.post("/stream")
-async def chat_stream(req: QueryRequest, db: Session = Depends(get_db)):
-    query = _sanitize(req.query)
-    query, pii_findings = scan_and_redact(query)
-    
-    if not query:
-        return StreamingResponse(
-            _sse_events("fallback", "Silakan ketik pertanyaan yang jelas ya."),
-            media_type="text/event-stream",
-        )
-
-    session = get_or_create_session(req.session_id, db)
-    session.updated_at = datetime.utcnow()
-    db.commit()
-
-    db.add(ChatMessage(session_id=session.session_id, role="user", content=query))
-    db.commit()
-
-    if _is_casual(query):
-        reply = generate_response(SYSTEM_PROMPT, "", get_history(session.session_id, db), query)
-        assistant_msg = ChatMessage(session_id=session.session_id, role="assistant", content=reply)
-        db.add(assistant_msg)
-        db.commit()
-
-        async def _casual_events():
-            yield f'data: {json.dumps({"event": "token", "text": reply})}\n\n'
-            await asyncio.sleep(0.01)
-            yield f'data: {json.dumps({"event": "done", "reply": reply, "session_id": session.session_id, "message_id": str(assistant_msg.id)})}\n\n'
-
-        return StreamingResponse(_casual_events(), media_type="text/event-stream")
-
-    history = get_history(session.session_id, db)
-    enriched_query = query
-
-    # Only rewrite if there's conversation history
-    if history.strip():
-        enriched_query = rewrite_query(query, history)
-
-    enriched_query = expand_synonyms(enriched_query)
-
-    try:
-        query_embedding = generate_embedding(enriched_query)
-    except Exception:
-        query_embedding = None
-
-    if query_embedding is None:
-        return StreamingResponse(
-            _sse_events("error", "Maaf, layanan sedang sibuk. Coba lagi."),
-            media_type="text/event-stream",
-        )
-
-    # ── Multi-source search: fetch top-K per file to prevent domain flooding ──
-    raw_results = multi_source_search(
-        query_vector=query_embedding,
-        limit_per_file=4,
-        score_threshold=0.3,
-        with_vectors=True,
-    )
-
-    if enriched_query != query:
-        try:
-            original_embedding = generate_embedding(query)
-        except Exception:
-            original_embedding = None
-        if original_embedding is not None:
-            orig_results = multi_source_search(
-                query_vector=original_embedding,
-                limit_per_file=4,
-                score_threshold=0.3,
-                with_vectors=True,
-            )
-            if orig_results and (not raw_results or orig_results[0].score > raw_results[0].score):
-                raw_results = orig_results
-                enriched_query = query
-
-    if not raw_results:
-        raw_results = multi_source_search(
-            query_vector=query_embedding,
-            limit_per_file=3,
-            score_threshold=0.0,
-            with_vectors=True,
-        )
-        if raw_results:
-            logger.info("Progressive fallback: recovered %d results", len(raw_results))
-
-    if not raw_results:
-        assistant_msg = ChatMessage(
-            session_id=session.session_id, role="assistant", content=FALLBACK_MESSAGE
-        )
-        db.add(assistant_msg)
-        db.commit()
-        return StreamingResponse(
-            _sse_events(
-                "fallback",
-                FALLBACK_MESSAGE,
-                session_id=session.session_id,
-                message_id=str(assistant_msg.id),
-            ),
-            media_type="text/event-stream",
-        )
-
-    chunks = []
-    for hit in raw_results:
-        p = hit.payload
-        if hit.score >= SIMILARITY_THRESHOLD:
-            chunks.append(
-                {
-                    "file_name": p.get("file_name", ""),
-                    "content": p.get("content", ""),
-                    "page_number": p.get("page_number"),
-                    "row_index": p.get("row_index"),
-                    "score": hit.score,
-                    "_vector": hit.vector if hasattr(hit, "vector") else None,
-                }
-            )
-
-    if chunks:
-        # Only rerank if there are many candidates
-        if len(chunks) > 5:
-            chunks = rerank_chunks(enriched_query, chunks)
-        chunks = [c for c in chunks if c.get("_vector") is not None]
-
-    tabular_fact, tabular_file = extract_tabular_fact(enriched_query)
-    if tabular_fact:
-        logger.info("Structured fact extracted: %s", tabular_fact[:80])
-        chunks.insert(0, {
-            "file_name": tabular_file or "",
-            "content": tabular_fact,
-            "page_number": None,
-            "row_index": None,
-            "score": 1.0,
-            "_vector": True
-        })
-
-    if not chunks:
-        assistant_msg = ChatMessage(
-            session_id=session.session_id, role="assistant", content=FALLBACK_MESSAGE
-        )
-        db.add(assistant_msg)
-        db.commit()
-        return StreamingResponse(
-            _sse_events(
-                "fallback",
-                FALLBACK_MESSAGE,
-                session_id=session.session_id,
-                message_id=str(assistant_msg.id),
-            ),
-            media_type="text/event-stream",
-        )
-
-    # ── Answerability Gate ───────────────────────────
-    gate = evaluate_answerability(chunks, query)
-    if not gate.can_answer:
-        reply = ABSTAIN_MESSAGE
-        assistant_msg = ChatMessage(session_id=session.session_id, role="assistant", content=reply)
-        db.add(assistant_msg)
-        db.commit()
-        
-        async def abstain_events():
-            yield f'data: {json.dumps({"event": "token", "text": reply})}\n\n'
-            await asyncio.sleep(0.01)
-            yield f'data: {json.dumps({"event": "done", "reply": reply, "session_id": session.session_id, "message_id": str(assistant_msg.id), "sources": []})}\n\n'
-            
-        return StreamingResponse(abstain_events(), media_type="text/event-stream")
-
-    context = format_context(chunks)
-    sources = [
-        {
-            "file_name": c["file_name"],
-            "page_number": c.get("page_number"),
-            "row_index": c.get("row_index"),
-        }
-        for c in chunks[:TOP_K]
-    ]
-
-    async def event_generator():
-        try:
-            full_reply = ""
-            for event_str in generate_response_stream(
-                SYSTEM_PROMPT, context, history, enriched_query
-            ):
-                event_data = json.loads(event_str[6:])  # strip "data: " prefix
-                if event_data.get("event") == "token":
-                    full_reply += event_data["text"]
-                elif event_data.get("event") == "error":
-                    yield event_str
-                    full_reply = event_data["text"]
-                    break
-                yield event_str
-
-            cited_reply = full_reply
-            assistant_msg = ChatMessage(
-                session_id=session.session_id, role="assistant", content=cited_reply
-            )
-            db.add(assistant_msg)
-            db.commit()
-
-            done_event = {
-                "event": "done",
-                "session_id": session.session_id,
-                "message_id": str(assistant_msg.id),
-                "sources": sources,
-                "reply": cited_reply,
-            }
-            yield f"data: {json.dumps(done_event)}\n\n"
-        except Exception as e:
-            logger.error("Stream error: %s", str(e))
-            yield f"data: {json.dumps({'event': 'error', 'text': 'Terjadi kesalahan. Coba lagi.'})}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
-def _sse_events(event_type: str, text: str, session_id: str = "", message_id: str = ""):
-    payload = {"event": event_type, "text": text}
-    if session_id:
-        payload["session_id"] = session_id
-    if message_id:
-        payload["message_id"] = message_id
-    yield f"data: {json.dumps(payload)}\n\n"
 
 
 @router.post("/feedback", response_model=FeedbackResponse)

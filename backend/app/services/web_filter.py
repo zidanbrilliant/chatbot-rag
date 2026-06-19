@@ -10,7 +10,7 @@ import logging
 from typing import Any
 
 from app.services.intent_classifier import PriceIntent
-from app.services.price_parser import ExtractedPrice, extract_prices_from_snippet
+from app.services.price_parser import extract_prices_from_snippet
 from app.services.sanitizer import sanitize_web_snippet
 
 logger = logging.getLogger("chatbot")
@@ -173,7 +173,6 @@ def pick_cheapest_web_results(
 
 
 import re as _re
-from typing import Iterable
 
 # Marketplace domain patterns for source scoring
 MARKETPLACE_URL_PATTERNS: dict[str, list[str]] = {

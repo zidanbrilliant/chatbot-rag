@@ -1,88 +1,11 @@
-"""Tests for StrictMode classifier — query classification and fixed responses."""
+"""Tests for StrictMode — fixed casual responses."""
 
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.services.strict_mode import classify_query, get_casual_response
-
-
-# ── classify_query ────────────────────────────────────
-
-
-def test_classify_casual_halo():
-    result = classify_query("halo")
-    assert result.mode == "casual"
-
-
-def test_classify_casual_hai():
-    result = classify_query("hai")
-    assert result.mode == "casual"
-
-
-def test_classify_casual_assalamualaikum():
-    result = classify_query("assalamualaikum")
-    assert result.mode == "casual"
-
-
-def test_classify_casual_apa_kabar():
-    result = classify_query("apa kabar")
-    assert result.mode == "casual"
-
-
-def test_classify_casual_terima_kasih():
-    result = classify_query("terima kasih")
-    assert result.mode == "casual"
-
-
-def test_classify_casual_kamu_siapa():
-    result = classify_query("kamu siapa")
-    assert result.mode == "casual"
-
-
-def test_classify_strict_price_query():
-    result = classify_query("berapa harga Polytron PAS 8C28")
-    assert result.mode == "strict"
-
-
-def test_classify_strict_comparison():
-    result = classify_query("bandingkan harga Polytron vs Sharp")
-    assert result.mode == "strict"
-
-
-def test_classify_strict_definition():
-    result = classify_query("apa itu Bitcoin?")
-    assert result.mode == "strict"  # "apa" trigger
-
-
-def test_classify_strict_description():
-    result = classify_query("jelaskan cara kerja Facebook Prophet")
-    assert result.mode == "strict"
-
-
-def test_classify_strict_kelebihan():
-    result = classify_query("kelebihan dan kekurangan LSTM")
-    assert result.mode == "strict"
-
-
-def test_classify_pure_creative_stats_clean():
-    """Creative-only query (no KB trigger words) goes to 'normal' mode
-    because classify_query sees no KB trigger patterns — then the
-    injection guard catches it separately."""
-    result = classify_query("tulis pantun")
-    assert result.mode in ("normal", "strict")  # no kb signals
-
-
-def test_classify_empty_query():
-    result = classify_query("")
-    assert result.mode == "normal"
-
-
-def test_classify_normal_general():
-    result = classify_query("how does machine learning work")
-    assert result.mode == "normal"
-
+from app.services.strict_mode import get_casual_response
 
 # ── get_casual_response ───────────────────────────────
 

@@ -4,7 +4,6 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.request import Request, urlopen
-from urllib.error import URLError
 
 from app.config import EMBEDDING_MODEL, OLLAMA_BASE_URL
 

@@ -65,7 +65,7 @@ def _detect_csv_separator(file_path: str, encoding: str = "utf-8") -> str:
     Returns one of: ';' ',' '\\t' '|'
     """
     try:
-        with open(file_path, "r", encoding=encoding) as f:
+        with open(file_path, encoding=encoding) as f:
             sample = f.read(2048)
     except Exception:
         return ","
@@ -83,7 +83,6 @@ def _detect_csv_separator(file_path: str, encoding: str = "utf-8") -> str:
 
 
 def parse_csv(file_path: str) -> list[dict]:
-    import pandas as pd
 
     file_name = Path(file_path).name
     df = None
@@ -131,7 +130,6 @@ def parse_csv(file_path: str) -> list[dict]:
 
 
 def parse_excel(file_path: str) -> list[dict]:
-    import pandas as pd
 
     file_name = Path(file_path).name
     xls = pd.ExcelFile(file_path)

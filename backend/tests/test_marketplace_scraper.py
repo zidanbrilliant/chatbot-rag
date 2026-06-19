@@ -9,10 +9,10 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.marketplace_scraper import (
-    MarketPrice,
     MarketplaceScraper,
-    is_marketplace_url,
+    MarketPrice,
     get_marketplace_label,
+    is_marketplace_url,
 )
 from app.services.web_filter import (
     enrich_web_with_source_score,
@@ -20,7 +20,6 @@ from app.services.web_filter import (
     filter_web_by_product_match,
     score_web_source,
 )
-
 
 # ── extract_model_tokens (NEW) ─────────────────────────
 
@@ -229,7 +228,6 @@ def test_scraper_save_snapshot():
 
 def test_scraper_search_marketplace_with_results():
     with patch("app.services.marketplace_scraper.search_web") as mock_sw:
-        from app.services.price_parser import ExtractedPrice
         mock_sw.return_value = [
             MagicMock(
                 url="https://www.tokopedia.com/p/x",
@@ -299,6 +297,7 @@ def test_stale_days_constant():
 
 def test_compute_staleness_old_price():
     from datetime import date, timedelta
+
     from app.services.price_service import _compute_staleness
     is_stale, age = _compute_staleness(date.today() - timedelta(days=40))
     assert is_stale is True
@@ -307,6 +306,7 @@ def test_compute_staleness_old_price():
 
 def test_compute_staleness_fresh_price():
     from datetime import date, timedelta
+
     from app.services.price_service import _compute_staleness
     is_stale, age = _compute_staleness(date.today() - timedelta(days=5))
     assert is_stale is False
@@ -323,6 +323,7 @@ def test_compute_staleness_none():
 def test_make_price_result_sets_staleness():
     from datetime import date, timedelta
     from decimal import Decimal
+
     from app.services.price_service import make_price_result
     r = make_price_result(
         product_name="X",
@@ -335,8 +336,9 @@ def test_make_price_result_sets_staleness():
 
 
 def test_make_price_result_fresh():
-    from datetime import date, timedelta
+    from datetime import date
     from decimal import Decimal
+
     from app.services.price_service import make_price_result
     r = make_price_result(
         product_name="X",

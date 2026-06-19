@@ -1,20 +1,20 @@
 import html
+import logging
 import os
 import re
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, Security
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Security, UploadFile
 from fastapi.security import APIKeyHeader
 from sqlalchemy.orm import Session
 
-from app.config import DATA_DIR, MAX_FILE_SIZE_MB, QDRANT_COLLECTION, ADMIN_API_KEY
+from app.config import ADMIN_API_KEY, DATA_DIR, MAX_FILE_SIZE_MB, QDRANT_COLLECTION
 from app.database import get_db
-from app.models.document import Document, DocumentStatus
-from app.models.ingestion import IngestionJob, IngestionJobStatus
+from app.models.document import Document
+from app.models.ingestion import IngestionJob
 from app.schemas.document import DeleteResponse, DocumentOut, UploadResponse
 from app.services.qdrant_client import get_qdrant
-import logging
 
 logger = logging.getLogger("chatbot")
 

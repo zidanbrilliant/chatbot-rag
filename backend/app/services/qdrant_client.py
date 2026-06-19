@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
 
 from qdrant_client import QdrantClient as Qdrant
 from qdrant_client.http.models import Distance, VectorParams

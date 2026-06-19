@@ -26,21 +26,6 @@ class QueryResponse(BaseModel):
     metadata: dict = {}  # e.g. {"price_table": [...]} for price queries
 
 
-class FallbackRequest(BaseModel):
-    session_id: str
-    query: str
-
-
-class ExternalSource(BaseModel):
-    title: str
-    url: str
-
-
-class FallbackResponse(BaseModel):
-    reply: str
-    external_sources: list[ExternalSource] = []
-
-
 class FeedbackRequest(BaseModel):
     message_id: str
     feedback: str

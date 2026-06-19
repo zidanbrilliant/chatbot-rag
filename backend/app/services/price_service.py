@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-from calendar import monthrange
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -63,7 +62,7 @@ def make_price_result(
     relevance_score: float = 1.0,
     url: str | None = None,
     title: str | None = None,
-) -> "PriceResult":
+) -> PriceResult:
     """Factory that auto-populates is_stale and age_days from price_date."""
     is_stale, age_days = _compute_staleness(price_date)
     return PriceResult(
@@ -85,11 +84,11 @@ def make_price_result(
 
 
 def select_top_results(
-    internal: list["PriceResult"],
+    internal: list[PriceResult],
     market: list | None = None,
     max_internal: int = 2,
     max_market: int = 2,
-) -> tuple[list["PriceResult"], list]:
+) -> tuple[list[PriceResult], list]:
     """Pick the most relevant results for display.
 
     Strategy:
@@ -193,17 +192,6 @@ class PriceResult:
     title: str | None = None
     is_stale: bool = False   # True if price_date > STALE_DAYS ago
     age_days: int | None = None  # computed at build time
-
-    def to_markdown_row(self) -> dict[str, str]:
-        return {
-            "sumber": self.source_detail[:40],
-            "produk": self.product_name[:50],
-            "harga": f"{self.currency} {self.price:,.0f}" if self.price else "-",
-            "satuan": self.unit or "-",
-            "tgl": self.price_date.isoformat() if self.price_date else "-",
-            "tipe": "internal" if self.source != "web" else "external",
-            "url": self.url or "-",
-        }
 
 
 class PriceService:
@@ -949,15 +937,6 @@ class PriceService:
         for col in columns:
             col_l = str(col).strip().lower()
             if any(c in col_l for c in candidates):
-                return col
-        return None
-
-    @staticmethod
-    def _find_unit_column(columns) -> str | None:
-        candidates = ("unit", "satuan", "satuan", "uom")
-        for col in columns:
-            col_l = str(col).strip().lower()
-            if col_l in candidates:
                 return col
         return None
 

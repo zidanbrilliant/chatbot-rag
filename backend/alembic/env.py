@@ -1,4 +1,5 @@
 import os
+import sys
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
@@ -10,12 +11,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-import sys
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import DATABASE_URL
 from app.database import Base
+import app.models  # noqa: F401  populates Base.metadata
 
 target_metadata = Base.metadata
 config.set_main_option("sqlalchemy.url", DATABASE_URL)

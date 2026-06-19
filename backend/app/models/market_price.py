@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from decimal import Decimal
 
 from sqlalchemy import (
     Column,
@@ -25,7 +24,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.database import Base
-
 
 # Marketplace identifiers used throughout the system.
 MARKETPLACE_TOKOPEDIA = "tokopedia"

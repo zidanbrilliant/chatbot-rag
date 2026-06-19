@@ -6,7 +6,7 @@ external dependencies (Qdrant, Redis, Ollama, Groq).
 
 import os
 import sys
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -102,6 +102,7 @@ def test_price_query_bitcoin_date():
         mock_files.return_value = []
         from datetime import date
         from decimal import Decimal
+
         from app.services.price_service import PriceResult
         mock_by_date.return_value = [PriceResult(
             source="postgres",
@@ -149,6 +150,7 @@ def test_price_query_samsung():
             }
         ]
         from decimal import Decimal
+
         from app.services.price_service import PriceResult
         mock_lookup.return_value = [PriceResult(
             source="postgres",
@@ -189,7 +191,6 @@ def test_non_price_query_passthrough():
     # Patch at the call site in _handle_price_query's caller
     # We just want to verify that the intent classifier says "not a price query"
     intent_result = None
-    import app.routers.chat as chat_mod
     from app.services.intent_classifier import detect_price_intent
     intent = detect_price_intent("apa itu Bitcoin?")
     print(f"  is_price_query: {intent.is_price_query}")

@@ -18,8 +18,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from app.database import SessionLocal  # noqa: E402
-from app.models.market_price import MarketPriceSnapshot  # noqa: E402
+from app.database import SessionLocal
+from app.models.market_price import MarketPriceSnapshot
 
 logger = logging.getLogger("chatbot.cleanup_market")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")

@@ -14,12 +14,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import text
-
 # Ensure app is on path when running as standalone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.config import DATA_DIR
+from app.config import DATA_DIR, QDRANT_COLLECTION
 from app.database import SessionLocal
 from app.models.document import AccessLevel, Document, DocumentStatus
 from app.models.ingestion import IngestionJob, IngestionJobStatus
@@ -27,7 +25,6 @@ from app.services.chunking import chunk_document
 from app.services.document_processor import parse_document
 from app.services.embedding import generate_embeddings
 from app.services.qdrant_client import get_qdrant
-from app.config import QDRANT_COLLECTION
 
 # ── Config ──────────────────────────────────────────────
 
@@ -73,8 +70,8 @@ def _ingest_csv_as_products(file_path: str, db) -> int:
     Returns number of products inserted/updated.
     """
     try:
-        from app.services.csv_product_mapper import parse_product_csv
         from app.models.price import Product, ProductPrice
+        from app.services.csv_product_mapper import parse_product_csv
     except ImportError:
         logger.warning("csv_product_mapper not available")
         return 0

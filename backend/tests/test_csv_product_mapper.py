@@ -7,12 +7,11 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.csv_product_mapper import (
-    parse_product_csv,
-    _parse_price,
     _detect_category,
     _generate_sku,
+    _parse_price,
+    parse_product_csv,
 )
-
 
 # ── _parse_price helper ────────────────────────────────
 

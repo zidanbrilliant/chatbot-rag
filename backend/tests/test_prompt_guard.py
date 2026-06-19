@@ -7,7 +7,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.prompt_guard import detect_injection, strip_injection
 
-
 # ── detect_injection ───────────────────────────────────
 
 
