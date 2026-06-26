@@ -20,9 +20,11 @@ from app.config import (
     REDIS_URL,
 )
 from app.database import SessionLocal, engine
-from app.routers import chat, documents
+from app.routers import auth, chat, documents
 from app.services.qdrant_client import ensure_collection, get_qdrant
 from app.services.scheduler import start_session_cleanup
+from app.services.seed_admin import seed_admin_user
+from app.middleware.metrics import metrics_middleware, render_metrics
 
 logger = logging.getLogger("chatbot")
 logger.setLevel(logging.INFO)
@@ -72,8 +74,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(documents.router)
+
+
+@app.middleware("http")
+async def prometheus_metrics_middleware(request: Request, call_next):
+    return await metrics_middleware(request, call_next)
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics():
+    return render_metrics()
 
 
 def _run_migrations():
@@ -91,6 +104,12 @@ def on_startup():
     _run_migrations()
     ensure_collection()
     start_session_cleanup()
+    try:
+        db = SessionLocal()
+        seed_admin_user(db)
+        db.close()
+    except Exception as e:
+        logger.error("Failed to seed admin user: %s", str(e))
 
 
 @app.on_event("shutdown")

@@ -100,11 +100,54 @@ def rerank_chunks(query: str, chunks: list[dict]) -> list[dict]:
 
 
 def format_context_with_ids(chunks: list[dict], max_tokens: int = 2000) -> tuple[str, dict[str, dict]]:
-    """Format chunks and return (context_text, chunk_id_mapping).
+    """Build numbered chunk context with ID mapping.
 
-    mapping = {"C1": {"chunk_id": ..., "file_name": ..., "page_number": ...}, ...}
+    Returns (context_text, mapping) where mapping = {"C1": {chunk_id, file_name, page_number}, ...}
     """
-    return _build_context(chunks, max_tokens)
+    parts = []
+    mapping: dict[str, dict] = {}
+    budget = max_tokens
+    for i, chunk in enumerate(chunks):
+        cid = f"C{i + 1}"
+        content = chunk.get("content", "")
+        file_name = chunk.get("file_name", "")
+        page = chunk.get("page_number")
+        row = chunk.get("row_index")
+
+        header = f"[CHUNK {cid}]"
+        source_label = f"File: {file_name}"
+        if page:
+            source_label += f" | Halaman: {page}"
+        if row is not None:
+            source_label += f" | Baris: {row}"
+
+        block = f"{header}\n{source_label}\n{content}"
+        estimated = len(block) // 4
+        if estimated > budget:
+            if budget > 0:
+                allowed_chars = budget * 4
+                block = f"{header}\n{source_label}\n{content[:allowed_chars]}..."
+                parts.append(block)
+                mapping[cid] = {
+                    "file_name": file_name,
+                    "page_number": page,
+                    "row_index": row,
+                    "chunk_id": chunk.get("chunk_id", cid),
+                    "document_id": chunk.get("document_id", ""),
+                }
+            break
+
+        parts.append(block)
+        budget -= estimated
+        mapping[cid] = {
+            "file_name": file_name,
+            "page_number": page,
+            "row_index": row,
+            "chunk_id": chunk.get("chunk_id", cid),
+            "document_id": chunk.get("document_id", ""),
+        }
+
+    return "\n\n".join(parts), mapping
 
 
 def format_hybrid_context(
@@ -194,51 +237,6 @@ def format_hybrid_context(
             "title": title,
             "url": url,
             "source_type": "external",
-        }
-
-    return "\n\n".join(parts), mapping
-
-
-def _build_context(chunks: list[dict], max_tokens: int) -> tuple[str, dict[str, dict]]:
-    """Build numbered chunk context with ID mapping."""
-    parts = []
-    mapping: dict[str, dict] = {}
-    budget = max_tokens
-    for i, chunk in enumerate(chunks):
-        cid = f"C{i + 1}"
-        content = chunk.get("content", "")
-        file_name = chunk.get("file_name", "")
-        page = chunk.get("page_number")
-        row = chunk.get("row_index")
-
-        header = f"[CHUNK {cid}]"
-        source_label = f"File: {file_name}"
-        if page:
-            source_label += f" | Halaman: {page}"
-        if row is not None:
-            source_label += f" | Baris: {row}"
-
-        block = f"{header}\n{source_label}\n{content}"
-        content_len = len(block)
-        estimated = content_len // 4  # rough token estimate
-
-        if estimated > budget:
-            if budget > 0:
-                allowed_chars = budget * 4
-                block = f"{header}\n{source_label}\n{content[:allowed_chars]}..."
-                parts.append(block)
-            break
-
-        parts.append(block)
-        budget -= estimated
-
-        # Build mapping
-        mapping[cid] = {
-            "file_name": file_name,
-            "page_number": page,
-            "row_index": row,
-            "chunk_id": chunk.get("chunk_id", cid),
-            "document_id": chunk.get("document_id", ""),
         }
 
     return "\n\n".join(parts), mapping

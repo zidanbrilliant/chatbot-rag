@@ -1,11 +1,10 @@
-"""Web Search Provider abstraction — DuckDuckGo (free).
+"""Web search — DuckDuckGo (free, no API key).
 """
 
 from __future__ import annotations
 
 import logging
 import socket
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 logger = logging.getLogger("chatbot")
@@ -18,12 +17,6 @@ class SearchResult:
     snippet: str
     score: float = 0.0
     source_type: str = "external"
-
-
-class SearchProvider(ABC):
-    @abstractmethod
-    def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
-        ...
 
 
 DUCKDUCKGO_IPS = ["104.18.32.47", "104.18.33.47", "104.16.0.0"]
@@ -48,7 +41,7 @@ def _unpatch_ddg_dns():
     socket.getaddrinfo = _original_getaddrinfo
 
 
-class DuckDuckGoProvider(SearchProvider):
+class DuckDuckGoProvider:
     """Free web search via duckduckgo-search library. No API key required."""
 
     def __init__(self, timeout: int = 10):
@@ -88,11 +81,11 @@ class DuckDuckGoProvider(SearchProvider):
 
         return results
 
-_provider: SearchProvider | None = None
+_provider: DuckDuckGoProvider | None = None
 
 
-def get_search_provider() -> SearchProvider:
-    """Return singleton search provider based on SEARCH_PROVIDER env var."""
+def get_search_provider() -> DuckDuckGoProvider:
+    """Return singleton DuckDuckGo provider."""
     global _provider
     if _provider is not None:
         return _provider

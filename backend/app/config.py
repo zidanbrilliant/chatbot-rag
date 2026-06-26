@@ -6,7 +6,6 @@ from app.core.config import (  # noqa: F401
     CORS_ORIGINS,
     DATA_DIR,
     DATABASE_URL,
-    EMBEDDING_DIM,
     EMBEDDING_MODEL,
     ENABLE_WEB_SEARCH,
     GROQ_API_KEY,

@@ -26,12 +26,10 @@ class Settings(BaseSettings):
     ollama_chat_model: str = Field("qwen2.5:7b", description="Chat model for local Ollama")
     ollama_base_url: str = Field("http://host.docker.internal:11434")
     embedding_model: str = Field("bge-m3")
-    embedding_dim: int = Field(1024)
-    similarity_threshold: float = Field(0.55)
+    similarity_threshold: float = Field(0.40)
     top_k: int = Field(5)
     chunk_size: int = Field(200)
     chunk_overlap: int = Field(25)
-    hybrid_top_k: int = Field(20)
     max_query_length: int = Field(2000)
     session_timeout_minutes: int = Field(30)
     max_history_turns: int = Field(10)
@@ -70,7 +68,6 @@ LLM_PROVIDER = _settings.llm_provider
 OLLAMA_CHAT_MODEL = _settings.ollama_chat_model
 OLLAMA_BASE_URL = _settings.ollama_base_url
 EMBEDDING_MODEL = _settings.embedding_model
-EMBEDDING_DIM = _settings.embedding_dim
 SIMILARITY_THRESHOLD = _settings.similarity_threshold
 TOP_K = _settings.top_k
 CHUNK_SIZE = _settings.chunk_size

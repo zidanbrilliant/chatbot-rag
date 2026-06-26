@@ -5,14 +5,15 @@ import re
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Security, UploadFile
-from fastapi.security import APIKeyHeader
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
-from app.config import ADMIN_API_KEY, DATA_DIR, MAX_FILE_SIZE_MB, QDRANT_COLLECTION
+from app.config import DATA_DIR, MAX_FILE_SIZE_MB, QDRANT_COLLECTION
 from app.database import get_db
+from app.middleware.auth import require_role
 from app.models.document import Document
 from app.models.ingestion import IngestionJob
+from app.models.user import User
 from app.schemas.document import DeleteResponse, DocumentOut, UploadResponse
 from app.services.qdrant_client import get_qdrant
 
@@ -33,21 +34,12 @@ def _sanitize_filename(filename: str) -> str:
     return name
 
 
-api_key_header = APIKeyHeader(name="X-API-Key")
-
-def verify_admin_key(api_key: str = Security(api_key_header)):
-    if api_key != ADMIN_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API Key")
-    return api_key
-
-
 def _validate_magic_bytes(contents: bytes, ext: str) -> bool:
     if not contents:
         return False
     if ext == ".pdf":
         return contents.startswith(b"%PDF-")
     elif ext in (".docx", ".xlsx"):
-        # ZIP signature
         return contents.startswith(b"PK\x03\x04") or contents.startswith(b"PK\x05\x06") or contents.startswith(b"PK\x07\x08")
     elif ext == ".csv":
         try:
@@ -60,9 +52,9 @@ def _validate_magic_bytes(contents: bytes, ext: str) -> bool:
 
 @router.post("/upload", status_code=202, response_model=UploadResponse)
 async def upload_document(
-    file: UploadFile = File(...), 
+    file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    api_key: str = Depends(verify_admin_key)
+    user: User = Depends(require_role("document_admin", "system_admin")),
 ):
     raw_filename = file.filename or "unnamed"
     safe_filename = _sanitize_filename(raw_filename)
@@ -113,7 +105,7 @@ def list_documents(
     db: Session = Depends(get_db),
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(50, ge=1, le=200, description="Items per page"),
-    api_key: str = Depends(verify_admin_key),
+    user: User = Depends(require_role("document_admin", "system_admin", "auditor")),
 ):
     total = db.query(Document).count()
     docs = (
@@ -134,9 +126,9 @@ def list_documents(
 
 @router.delete("/{document_id}", response_model=DeleteResponse)
 def delete_document(
-    document_id: str, 
+    document_id: str,
     db: Session = Depends(get_db),
-    api_key: str = Depends(verify_admin_key),
+    user: User = Depends(require_role("document_admin", "system_admin")),
 ):
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
