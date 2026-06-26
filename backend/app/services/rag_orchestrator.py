@@ -103,10 +103,6 @@ class RagOrchestrator:
         # Build chunks from raw_results
         chunks = self._extract_chunks(raw_results, enriched_query)
 
-        # Sanitize web snippets
-        if web_results:
-            web_results = sanitize_all_web_snippets(web_results)
-
         # Structured fact injection
         tabular_fact, tabular_file = extract_tabular_fact(enriched_query)
         if tabular_fact:
@@ -120,31 +116,34 @@ class RagOrchestrator:
                 "_vector": True,
             })
 
-        # No content at all
-        if not chunks and not web_results:
+        # Ponytail: web only SUPPLEMENTS internal. If no internal chunks, drop web.
+        # PRD: "Sistem harus menyatakan bahwa informasi tidak ditemukan dalam
+        # knowledge base, bukan membuat asumsi."
+        if not chunks:
             return {
                 "reply": SYSTEM_PROMPT_FALLBACK,
                 "sources": [],
                 "confidence": "abstain",
                 "citation_data": [],
-                "out_of_context": False,
-                "fallback_triggered": True,
+                "out_of_context": True,
+                "fallback_triggered": False,
             }
 
-        # Answerability gate
-        if chunks:
-            gate = evaluate_answerability(chunks, query)
-            if not gate.can_answer and not web_results:
-                return {
-                    "reply": ABSTAIN_MESSAGE,
-                    "sources": [],
-                    "confidence": gate.confidence,
-                    "citation_data": [],
-                    "out_of_context": True,
-                    "fallback_triggered": False,
-                }
-        else:
-            gate = AnswerabilityResult(can_answer=True, confidence="medium", reason="web-only")
+        # Sanitize web snippets (only when internal chunks exist)
+        if web_results:
+            web_results = sanitize_all_web_snippets(web_results)
+
+        # Answerability gate (internal chunks always present now)
+        gate = evaluate_answerability(chunks, query)
+        if not gate.can_answer:
+            return {
+                "reply": ABSTAIN_MESSAGE,
+                "sources": [],
+                "confidence": gate.confidence,
+                "citation_data": [],
+                "out_of_context": True,
+                "fallback_triggered": False,
+            }
 
         # Build context + LLM
         if web_results:
