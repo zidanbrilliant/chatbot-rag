@@ -112,12 +112,24 @@ def _search_web_with_cache(query: str) -> list[dict]:
     except Exception as e:
         logger.warning("web search failed: %s", str(e)[:120])
         return []
-    cache_search_results(query, results)
+    # Convert SearchResult dataclass instances to dicts for downstream consumers
+    # (web_filter, rag_orchestrator, response_formatter all use .get() on these)
+    results_dicts = [
+        {
+            "title": r.title,
+            "url": r.url,
+            "snippet": r.snippet,
+            "score": r.score,
+            "source_type": r.source_type,
+        }
+        for r in results
+    ]
+    cache_search_results(query, results_dicts)
     try:
-        log_web_search(query=query, provider="duckduckgo", results_count=len(results), latency_ms=0)
+        log_web_search(query=query, provider="duckduckgo", results_count=len(results_dicts), latency_ms=0)
     except Exception:
         pass
-    return results
+    return results_dicts
 
 
 # ── Routes ───────────────────────────────────────────

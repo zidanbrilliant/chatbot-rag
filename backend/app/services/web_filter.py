@@ -325,12 +325,28 @@ def sanitize_all_web_snippets(
     Each web result's 'snippet' field is cleaned. If a snippet is
     too heavily filtered, it's replaced with a placeholder.
     Mutates and returns the list.
+
+    Accepts list of dicts OR SearchResult-like objects; converts to dicts first.
     """
     if not web_results:
         return web_results
 
-    sanitized_count = 0
+    # Coerce SearchResult (or any non-dict) to dict
+    normalized: list[dict] = []
     for w in web_results:
+        if isinstance(w, dict):
+            normalized.append(w)
+        else:
+            normalized.append({
+                "title": getattr(w, "title", ""),
+                "url": getattr(w, "url", ""),
+                "snippet": getattr(w, "snippet", ""),
+                "score": getattr(w, "score", 0.0),
+                "source_type": getattr(w, "source_type", "external"),
+            })
+
+    sanitized_count = 0
+    for w in normalized:
         snippet = w.get("snippet", "")
         if not snippet:
             continue

@@ -5,6 +5,7 @@ import time
 import redis
 from alembic.config import Config as AlembicConfig
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pythonjsonlogger import jsonlogger
@@ -83,6 +84,20 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(documents.router)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Log full traceback for unhandled exceptions, return 500 with detail.
+    Skip FastAPI's own HTTPException + validation errors — they have their own handlers.
+    """
+    if isinstance(exc, (RequestValidationError,)):
+        raise exc
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error: {type(exc).__name__}: {str(exc)[:200]}"},
+    )
 
 
 @app.middleware("http")
