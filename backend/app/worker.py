@@ -355,6 +355,7 @@ def process_job(job_id: str) -> bool:
         job.finished_at = datetime.now(timezone.utc)
         doc.status = DocumentStatus.COMPLETED
         db.commit()
+        record_ingestion("completed")
         return True
 
     except Exception as e:
@@ -373,6 +374,7 @@ def process_job(job_id: str) -> bool:
                 # If embedding failure persists, document stays FAILED but
                 # worker won't retry indefinitely (max_attempts bounds it)
             db.commit()
+            record_ingestion("failed" if job and job.status == IngestionJobStatus.FAILED else "retried")
         except Exception:
             db.rollback()
         return False
