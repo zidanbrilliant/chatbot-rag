@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { login } from '../api'
+import { login, setSession } from '../api'
 
 export default function Login() {
   const [username, setUsername] = useState('')
@@ -13,8 +13,8 @@ export default function Login() {
     setBusy(true)
     try {
       const data = await login(username, password)
+      setSession(data.token, { username: data.username, role: data.role })
       window.location.reload()
-      return data
     } catch (err) {
       setError(err.response?.data?.detail || 'Login gagal')
     } finally {
