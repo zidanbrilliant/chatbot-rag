@@ -29,10 +29,16 @@ from app.middleware.metrics import metrics_middleware, render_metrics
 logger = logging.getLogger("chatbot")
 logger.setLevel(logging.INFO)
 logHandler = logging.StreamHandler()
+# Use JSON formatter for prod. Add plain stderr handler for tracebacks.
 formatter = jsonlogger.JsonFormatter('%(asctime)s %(levelname)s %(name)s %(message)s')
 logHandler.setFormatter(formatter)
 if not logger.handlers:
     logger.addHandler(logHandler)
+    # Also add plain formatter so exceptions (traceback) are visible
+    plain = logging.StreamHandler()
+    plain.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
+    plain.setLevel(logging.WARNING)
+    logger.addHandler(plain)
 
 app = FastAPI(title="Knowledge Base Chatbot", version="1.0.0")
 
@@ -92,9 +98,13 @@ def metrics():
 def _run_migrations():
     alembic_ini = os.path.join(os.path.dirname(__file__), "..", "alembic.ini")
     if os.path.isfile(alembic_ini):
-        cfg = AlembicConfig(alembic_ini)
-        command.upgrade(cfg, "head")
-        logger.info("Database migrations applied successfully")
+        try:
+            cfg = AlembicConfig(alembic_ini)
+            command.upgrade(cfg, "head")
+            logger.info("Database migrations applied successfully")
+        except Exception as e:
+            logger.exception("Migration failed: %s", str(e))
+            raise
     else:
         logger.warning("alembic.ini not found — skipping migrations")
 
@@ -102,14 +112,18 @@ def _run_migrations():
 @app.on_event("startup")
 def on_startup():
     _run_migrations()
-    ensure_collection()
+    try:
+        ensure_collection()
+    except Exception as e:
+        logger.exception("ensure_collection failed: %s", str(e))
+        raise
     start_session_cleanup()
     try:
         db = SessionLocal()
         seed_admin_user(db)
         db.close()
     except Exception as e:
-        logger.error("Failed to seed admin user: %s", str(e))
+        logger.exception("Failed to seed admin user: %s", str(e))
 
 
 @app.on_event("shutdown")
