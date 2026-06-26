@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt
+          pip install ruff mypy
+      - name: Lint (ruff)
+        working-directory: backend
+        run: ruff check app/ tests/
+      - name: Format check (black)
+        working-directory: backend
+        run: |
+          pip install black
+          black --check app/ tests/
+      - name: Typecheck (mypy)
+        working-directory: backend
+        run: mypy app/ --ignore-missing-imports || true
+
+  backend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: Test
+        working-directory: backend
+        env:
+          DATABASE_URL: sqlite:///:memory:
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          pytest tests/ -v \
+            --ignore=tests/test_e2e_ohlc.py \
+            --ignore=tests/test_e2e_price.py \
+            --ignore=tests/test_http_price.py \
+            --ignore=tests/test_auth_integration.py
+
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: Run eval harness
+        working-directory: backend
+        run: python evals/runner.py

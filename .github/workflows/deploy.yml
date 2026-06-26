@@ -1,0 +1,26 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "docker-compose.yml"
+      - ".github/workflows/deploy.yml"
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build -t chatbot-backend:${{ github.sha }} ./backend
+      - name: Build frontend image
+        run: docker build -t chatbot-frontend:${{ github.sha }} ./frontend
+      # Add push step when registry configured
+      # - name: Push to registry
+      #   run: |
+      #     echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login -u ${{ secrets.REGISTRY_USER }} --password-stdin
+      #     docker push chatbot-backend:${{ github.sha }}
+      #     docker push chatbot-frontend:${{ github.sha }}
