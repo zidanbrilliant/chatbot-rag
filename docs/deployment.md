@@ -3,14 +3,14 @@
 ## Prerequisites
 
 - Docker 24+ + Docker Compose v2
-- Ollama running on host (for embeddings): https://ollama.ai
+- Ollama running on host: https://ollama.ai
 - Groq API key: https://console.groq.com
 - GPU recommended for Ollama (CPU works but slow)
 
 ## Pre-deploy checklist
 
 1. Generate strong `ADMIN_PASSWORD` (16+ chars)
-2. Generate strong `JWT_SECRET_KEY` (32+ chars, base64)
+2. Generate strong `JWT_SECRET_KEY` (32+ chars, base64) — used for JWT signing
 3. Update `CORS_ORIGINS` to production domain
 4. Set `APP_ENV=production`
 5. Pull Ollama model: `ollama pull bge-m3`
@@ -22,14 +22,14 @@
 git clone <repo-url> chatbot-rag
 cd chatbot-rag
 
-# Create .env from template
+# Create .env
 cp .env.example .env
 $EDITOR .env   # fill GROQ_API_KEY, ADMIN_PASSWORD
 
 # Build + start
 docker compose up --build -d
 
-# Wait ~30s for migrations + Ollama health
+# Wait for healthy (all 6 services)
 docker compose ps
 docker compose logs -f backend | grep "Application startup"
 ```
@@ -52,7 +52,7 @@ curl http://localhost:8000/metrics
 
 ## Login + first user
 
-Default admin seeded on startup from `ADMIN_USERNAME`/`ADMIN_PASSWORD` env vars.
+Default admin seeded on startup from `ADMIN_USERNAME`/`ADMIN_PASSWORD` env.
 
 ```bash
 # Get token
@@ -70,22 +70,15 @@ curl http://localhost:8000/api/v1/chat/query \
 ## Updating
 
 ```bash
-# Pull new code
 git pull
-
-# Rebuild + restart
 docker compose up --build -d
-
 # Worker picks up new code on restart (graceful — finishes current job first)
 ```
 
 ## Rollback
 
 ```bash
-# Tag before deploy
 docker tag chatbot-backend:latest chatbot-backend:backup-$(date +%Y%m%d)
-
-# Rollback
 docker compose down
 git checkout <previous-commit>
 docker compose up --build -d
@@ -122,7 +115,7 @@ server {
 ## Production hardening
 
 1. **Change default password** — admin user seeded with `admin123` if `ADMIN_PASSWORD` not set
-2. **Set `JWT_SECRET_KEY`** — used as HMAC secret for token signing
+2. **Set `JWT_SECRET_KEY`** — used as HMAC secret for token signing. Minimum 32 bytes.
 3. **Restrict CORS** — remove `localhost` from `CORS_ORIGINS`
 4. **TLS** — terminate at reverse proxy, not in app
 5. **Rate limiting** — adjust `RATE_LIMIT_*` for expected traffic
@@ -131,6 +124,7 @@ server {
    - `http_requests_total{status=~"5.."}` rate
    - `http_request_duration_seconds` p95 > 8s
    - `chat_queries_total{outcome="abstain"}` rate spike
+   - `answerability_abstains_total` rate spike
 
 ## Common issues
 
@@ -142,11 +136,13 @@ server {
 | 429 rate limit | Lower request rate, or raise `RATE_LIMIT_*` env vars |
 | Upload fails silently | Check `MAX_FILE_SIZE_MB` and nginx `client_max_body_size` |
 | Embedding slow | First time loads model into VRAM. Subsequent calls fast |
+| 500 on chat query | Run `python backfill_access_level.py` if Qdrant has 0 hits |
+| "supersecret" warning in logs | Set `JWT_SECRET_KEY` to 32+ char random value in `.env` |
 
 ## Log locations
 
 ```bash
-# Backend (JSON logs)
+# Backend (JSON logs to stdout)
 docker compose logs backend -f
 
 # Worker
@@ -154,4 +150,16 @@ docker compose logs worker -f
 
 # Postgres
 docker compose logs db -f | grep ERROR
+
+# Frontend (Vite dev server)
+docker compose logs frontend -f
 ```
+
+## Access control matrix
+
+| Role | Endpoints | Qdrant access |
+|------|-----------|---------------|
+| `viewer` | chat, feedback | `internal` only |
+| `document_admin` | + upload/list/delete documents | `internal` + `restricted` |
+| `system_admin` | + register users | all (incl. `confidential`) |
+| `auditor` | list documents | all (read-only) |

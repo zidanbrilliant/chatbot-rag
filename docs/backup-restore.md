@@ -4,7 +4,7 @@
 
 | Data | Location | Criticality |
 |---|---|---|
-| PostgreSQL | Docker volume `pgdata` | HIGH — chat history, users, audit logs |
+| PostgreSQL | Docker volume `pgdata` | HIGH — users, chat history, audit logs, documents metadata |
 | Qdrant vectors | Docker volume `qdrant_data` | HIGH — knowledge base embeddings |
 | Uploaded files | `./data/` on host | MEDIUM — source docs (re-ingestable) |
 | Environment | `.env` file | HIGH — secrets, config |
@@ -23,11 +23,13 @@ mkdir -p "$BACKUP_DIR"
 # PostgreSQL
 docker compose exec -T db pg_dump -U postgres chatbot | gzip > "$BACKUP_DIR/db.sql.gz"
 
-# Qdrant snapshots
-docker compose exec -T qdrant mkdir -p /qdrant/snapshots/backup_$(date +%s)
-# Trigger snapshot via API
-curl -X POST "http://localhost:6333/snapshots" -H "Content-Type: application/json"
-# Snapshot file appears in qdrant_data volume
+# Qdrant — create snapshot via API
+SNAPSHOT_NAME="backup_$(date +%s)"
+curl -X POST "http://localhost:6333/collections/company_knowledge_base/snapshots" \
+  -H "Content-Type: application/json" \
+  -d "{\"snapshot_name\": \"$SNAPSHOT_NAME\"}"
+# Snapshot file lives in qdrant_data volume
+docker compose exec -T qdrant ls /qdrant/snapshots/$SNAPSHOT_NAME/ 2>/dev/null || true
 
 # Uploaded files
 tar czf "$BACKUP_DIR/data.tar.gz" ./data
@@ -47,13 +49,14 @@ ls -lh "$BACKUP_DIR"
 
 ```bash
 # Create snapshot
-curl -X POST "http://localhost:6333/collections/company_knowledge_base/snapshots"
+curl -X POST "http://localhost:6333/collections/company_knowledge_base/snapshots" \
+  -H "Content-Type: application/json" -d '{}'
 
 # List snapshots
 curl "http://localhost:6333/collections/company_knowledge_base/snapshots"
 
 # Download snapshot
-curl -O "http://localhost:6333/collections/company_knowledge_base/snapshots/<snapshot_name>"
+curl -O "http://localhost:6333/collections/company_knowledge_base/snapshots/<snapshot_name>.snapshot"
 ```
 
 ## Restore
@@ -72,17 +75,21 @@ if [ -z "$BACKUP_DIR" ] || [ ! -d "$BACKUP_DIR" ]; then
   exit 1
 fi
 
-# Stop services
-docker compose down
+# Stop services (preserve volumes)
+docker compose stop backend worker frontend
 
 # Restore PostgreSQL
-docker compose up -d db
-sleep 5
 gunzip -c "$BACKUP_DIR/db.sql.gz" | docker compose exec -T db psql -U postgres chatbot
 
-# Restore Qdrant snapshot
-# Copy snapshot file to qdrant_data volume, then restore via API:
-# curl -X PUT "http://localhost:6333/collections/company_knowledge_base/snapshots/<snapshot_name>"
+# Restore Qdrant from snapshot (upload then recover)
+SNAPSHOT_FILE=$(find "$BACKUP_DIR" -name "*.snapshot" | head -1)
+if [ -n "$SNAPSHOT_FILE" ]; then
+  curl -X PUT "http://localhost:6333/collections/company_knowledge_base/snapshots/upload?priority=snapshot" \
+    -H "Content-Type: application/octet-stream" \
+    --data-binary @"$SNAPSHOT_FILE"
+  curl -X POST "http://localhost:6333/collections/company_knowledge_base/snapshots/recover" \
+    -H "Content-Type: application/json" -d '{}'
+fi
 
 # Restore files
 tar xzf "$BACKUP_DIR/data.tar.gz" -C ./
@@ -97,30 +104,32 @@ docker compose up -d
 ### Restore PostgreSQL only
 
 ```bash
-# Stop backend/worker
 docker compose stop backend worker
-
-# Restore DB
 gunzip -c backup.sql.gz | docker compose exec -T db psql -U postgres chatbot
-
-# Restart
 docker compose start backend worker
 ```
 
 ### Restore Qdrant only
 
 ```bash
-# Stop backend/worker
 docker compose stop backend worker
-
-# Restore from snapshot
-curl -X PUT "http://localhost:6333/collections/company_knowledge_base/snapshots/upload" \
+curl -X PUT "http://localhost:6333/collections/company_knowledge_base/snapshots/upload?priority=snapshot" \
   -H "Content-Type: application/octet-stream" \
   --data-binary @snapshot.snapshot
-
-# Restart
+curl -X POST "http://localhost:6333/collections/company_knowledge_base/snapshots/recover" \
+  -H "Content-Type: application/json" -d '{}'
 docker compose start backend worker
 ```
+
+### After restore: backfill access_level
+
+Old Qdrant points (pre-P0) lack `access_level` field. After restore:
+
+```bash
+docker exec chatbot-rag-backend-1 python /app/backfill_access_level.py
+```
+
+Idempotent. Sets `access_level: internal` on every point missing it.
 
 ## Disaster recovery checklist
 
