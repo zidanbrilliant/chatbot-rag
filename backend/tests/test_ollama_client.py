@@ -1,9 +1,25 @@
-"""Tests for ollama_client.generate_response_ollama — uses mocked requests.post."""
+"""Tests for ollama_client.generate_response_ollama — uses mocked urllib.request."""
+import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError, URLError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+
+class FakeResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
 
 
 def test_builds_correct_request_payload():
@@ -11,24 +27,21 @@ def test_builds_correct_request_payload():
 
     captured = {}
 
-    def fake_post(url, json, timeout):
-        captured["url"] = url
-        captured["json"] = json
+    def fake_urlopen(req, timeout):
+        captured["url"] = req.full_url
+        captured["data"] = json.loads(req.data.decode("utf-8"))
         captured["timeout"] = timeout
-        r = MagicMock()
-        r.raise_for_status = MagicMock()
-        r.json.return_value = {"message": {"content": "ok"}}
-        return r
+        return FakeResponse(json.dumps({"message": {"content": "ok"}}).encode("utf-8"))
 
-    with patch("app.services.ollama_client.requests.post", side_effect=fake_post):
+    with patch("app.services.ollama_client.urllib.request.urlopen", side_effect=fake_urlopen):
         result = generate_response_ollama("SYS", "ctx with nik 3171234567890123", "hist", "Q?")
 
     assert result == "ok"
     assert captured["url"].endswith("/api/chat")
-    assert captured["json"]["model"] == "qwen2.5:7b"
-    assert captured["json"]["stream"] is False
+    assert captured["data"]["model"] == "qwen2.5:7b"
+    assert captured["data"]["stream"] is False
     assert captured["timeout"] == 90
-    msgs = captured["json"]["messages"]
+    msgs = captured["data"]["messages"]
     assert msgs[0] == {"role": "system", "content": "SYS"}
     assert msgs[-1] == {"role": "user", "content": "Q?"}
     assert any("hist" in m["content"] for m in msgs)
@@ -37,23 +50,16 @@ def test_builds_correct_request_payload():
 
 def test_retries_on_http_error():
     from app.services.ollama_client import generate_response_ollama
-    import requests as _req
-
-    success = MagicMock()
-    success.raise_for_status = MagicMock()
-    success.json.return_value = {"message": {"content": "second try"}}
 
     call_count = {"n": 0}
 
-    def fake_post(url, json, timeout):
+    def fake_urlopen(req, timeout):
         call_count["n"] += 1
         if call_count["n"] == 1:
-            r = MagicMock()
-            r.raise_for_status.side_effect = _req.HTTPError("boom")
-            return r
-        return success
+            raise HTTPError(req.full_url, 500, "boom", {}, None)
+        return FakeResponse(json.dumps({"message": {"content": "second try"}}).encode("utf-8"))
 
-    with patch("app.services.ollama_client.requests.post", side_effect=fake_post):
+    with patch("app.services.ollama_client.urllib.request.urlopen", side_effect=fake_urlopen):
         with patch("app.services.ollama_client.time.sleep") as _sleep:
             result = generate_response_ollama("SYS", "", "", "Q?")
 
@@ -64,14 +70,11 @@ def test_retries_on_http_error():
 
 def test_raises_after_max_retries():
     from app.services.ollama_client import MAX_RETRIES, generate_response_ollama
-    import requests as _req
 
-    def fake_post(url, json, timeout):
-        r = MagicMock()
-        r.raise_for_status.side_effect = _req.HTTPError("permanent fail")
-        return r
+    def fake_urlopen(req, timeout):
+        raise HTTPError(req.full_url, 500, "permanent fail", {}, None)
 
-    with patch("app.services.ollama_client.requests.post", side_effect=fake_post):
+    with patch("app.services.ollama_client.urllib.request.urlopen", side_effect=fake_urlopen):
         with patch("app.services.ollama_client.time.sleep"):
             try:
                 generate_response_ollama("SYS", "", "", "Q?")

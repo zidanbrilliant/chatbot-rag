@@ -4,10 +4,11 @@ Calls Ollama's /api/chat endpoint with the same message shape and
 retry pattern as groq_client.py. PII redaction is applied to context
 to stay consistent with the Groq path.
 """
+import json
 import logging
 import time
-
-import requests
+import urllib.error
+import urllib.request
 
 from app.config import OLLAMA_BASE_URL, OLLAMA_CHAT_MODEL
 from app.services.sanitizer import redact_pii
@@ -15,6 +16,17 @@ from app.services.sanitizer import redact_pii
 logger = logging.getLogger("chatbot")
 MAX_RETRIES = 3
 TIMEOUT_SECONDS = 90
+
+
+def _post_json(url: str, payload: dict, timeout: int) -> dict:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def generate_response_ollama(system_prompt: str, context: str, history: str, query: str) -> str:
@@ -30,10 +42,9 @@ def generate_response_ollama(system_prompt: str, context: str, history: str, que
     last_error: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
-            resp = requests.post(url, json=payload, timeout=TIMEOUT_SECONDS)
-            resp.raise_for_status()
-            return resp.json()["message"]["content"] or ""
-        except (requests.RequestException, KeyError, ValueError) as e:
+            data = _post_json(url, payload, TIMEOUT_SECONDS)
+            return data.get("message", {}).get("content") or ""
+        except (urllib.error.URLError, KeyError, ValueError, json.JSONDecodeError) as e:
             last_error = e
             logger.warning(
                 "Ollama chat attempt %d/%d failed: %s",

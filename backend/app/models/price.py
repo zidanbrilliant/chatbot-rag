@@ -1,4 +1,3 @@
-import enum
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
@@ -19,15 +18,6 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.database import Base
-
-
-class ProductCategory(str, enum.Enum):
-    PRODUCT = "product"
-    STOCK = "stock"
-    CRYPTO = "crypto"
-    MATERIAL = "material"
-    SERVICE = "service"
-    OTHER = "other"
 
 
 class Product(Base):
